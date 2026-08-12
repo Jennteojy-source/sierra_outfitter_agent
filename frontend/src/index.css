@@ -1,0 +1,41 @@
+:root {
+  --pine: #1b3a2f;
+  --pine-deep: #0f241c;
+  --moss: #3d6b54;
+  --mist: #e8f0eb;
+  --fog: #f4f7f5;
+  --trail: #c4a574;
+  --ink: #14201a;
+  --muted: #5a6f64;
+  --white: #ffffff;
+  --danger: #8b3a3a;
+  --radius: 14px;
+  --font-display: "Literata", Georgia, serif;
+  --font-body: "Manrope", system-ui, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  font-family: var(--font-body);
+  color: var(--ink);
+  background:
+    radial-gradient(ellipse 90% 60% at 10% -10%, #d7e8de 0%, transparent 55%),
+    radial-gradient(ellipse 70% 50% at 100% 0%, #cfe0d6 0%, transparent 50%),
+    linear-gradient(180deg, #eef4f0 0%, #dfeae3 100%);
+}
+
+button,
+input,
+textarea {
+  font: inherit;
+}
