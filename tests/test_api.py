@@ -107,7 +107,7 @@ def test_nudge_is_one_shot_and_reset_clears_it():
         )
 
     with patch("server.main.run_nudge") as mock_nudge:
-        mock_nudge.return_value = ("Still on the trail?", [])
+        mock_nudge.return_value = ("Still on the trail?", [], None)
         first = client.post("/api/nudge", headers={"x-session-id": sid})
         assert first.json()["already_sent"] is False
         assert first.json()["message"] == "Still on the trail?"
@@ -123,14 +123,14 @@ def test_nudge_is_one_shot_and_reset_clears_it():
     assert after.json()["skipped"] is True
 
 
-def test_handoff_mutes_agent_until_reset():
-    sid = "handoff-mute-sid"
+def test_handoff_keeps_agent_available_for_in_scope_followups():
+    sid = "handoff-queue-sid"
     with patch("server.main.run_agent") as mock_agent:
         mock_agent.return_value = (
-            "A human trail guide will pick this up shortly.",
+            "A human trail guide is queued. I can still help with gear.",
             [],
             None,
-            {"handed_off": True, "handoff_reason": "explicit_request"},
+            {"handed_off": True, "handoff_reason": "explicit_request", "debug": {"model": "gpt-4o"}},
         )
         first = client.post(
             "/api/chat",
@@ -139,17 +139,25 @@ def test_handoff_mutes_agent_until_reset():
         )
         assert first.json()["handed_off"] is True
         assert first.json()["kind"] == "handoff"
+        assert first.json()["debug"]["model"] == "gpt-4o"
         assert mock_agent.call_count == 1
 
-        note = client.post(
+        mock_agent.return_value = (
+            "Bhavish's Backcountry Blaze Backpack is in stock.",
+            [],
+            [{"sku": "SOBP001"}],
+            {"handed_off": False, "debug": {"model": "gpt-4o", "tool_calls": [{"name": "search_catalog"}]}},
+        )
+        follow = client.post(
             "/api/chat",
-            data={"message": "My order was damaged"},
+            data={"message": "Do you sell hiking backpacks?"},
             headers={"x-session-id": sid},
         )
-        assert note.json()["muted"] is True
-        assert note.json()["message"] == ""
-        assert note.json()["kind"] is None
-        assert mock_agent.call_count == 1
+        assert follow.json()["handed_off"] is True
+        assert follow.json()["kind"] is None
+        assert "Backpack" in follow.json()["message"]
+        assert mock_agent.call_count == 2
+        assert mock_agent.call_args.kwargs.get("handoff_queued") is True
 
     reset = client.post("/api/reset", headers={"x-session-id": sid})
     fresh = reset.json()["session_id"]
@@ -162,7 +170,6 @@ def test_handoff_mutes_agent_until_reset():
             headers={"x-session-id": fresh},
         )
         assert again.json()["handed_off"] is False
-        assert again.json()["muted"] is False
         assert mock_agent.call_count == 1
 
 

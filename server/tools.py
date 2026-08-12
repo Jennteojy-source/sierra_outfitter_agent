@@ -49,24 +49,37 @@ def _normalize(value: str) -> str:
 
 
 def lookup_order(order_number: str | None = None, email: str | None = None) -> dict[str, Any]:
+    order_number = (order_number or "").strip() or None
+    email = (email or "").strip() or None
+    missing: list[str] = []
+    if not order_number:
+        missing.append("order_number")
+    if not email:
+        missing.append("email")
+    if missing:
+        return {
+            "found": False,
+            "need": missing,
+            "message": (
+                "Both order_number and email are required before looking up an order. "
+                "Ask the customer for the missing field(s); do not guess."
+            ),
+        }
+
     orders = _load_orders()
     matches: list[dict[str, Any]] = []
 
     for order in orders:
-        ok = True
-        if order_number:
-            if _normalize(order["OrderNumber"]) != _normalize(order_number):
-                ok = False
-        if email:
-            if order["Email"].lower().strip() != email.lower().strip():
-                ok = False
-        if ok and (order_number or email):
-            matches.append(order)
+        if _normalize(order["OrderNumber"]) != _normalize(order_number):
+            continue
+        if order["Email"].lower().strip() != email.lower().strip():
+            continue
+        matches.append(order)
 
     if not matches:
         return {
             "found": False,
-            "message": "No order found for the provided order number and/or email.",
+            "message": "No order found for that order number and email together.",
         }
 
     results = []
@@ -114,11 +127,6 @@ def search_catalog(
     )
 
 
-# Back-compat alias
-def recommend_products(query: str, limit: int = 4, in_stock_only: bool = False) -> dict[str, Any]:
-    return search_catalog(query=query, limit=limit, in_stock_only=in_stock_only)
-
-
 def early_riser_promo() -> dict[str, Any]:
     now = datetime.now(PT)
     in_window = now.hour in (8, 9)  # 8:00 inclusive through 9:59
@@ -153,10 +161,11 @@ def request_human_handoff(reason: str, summary: str | None = None) -> dict[str, 
         "reason": clean_reason,
         "summary": (summary or "").strip() or None,
         "queue": "human_trail_guides",
-        "ai_muted": True,
+        "queued": True,
         "message": (
-            "Handoff recorded. Confirm briefly that a human will take over, then stop. "
-            "Do not keep answering as the AI."
+            "Handoff queued — a human will join. Confirm that, and say you can still "
+            "help with catalog, orders, and Early Risers while they wait. Do not try "
+            "to finish the escalated issue."
         ),
     }
 
@@ -168,29 +177,22 @@ TOOL_DEFINITIONS = [
             "name": "lookup_order",
             "description": (
                 "Skill: Customer Orders. Look up order status and tracking. "
-                "Call with EITHER order_number OR email alone — both are not required. "
-                "If the customer already gave an order number, call immediately with that "
-                "order_number; do not wait for email. Same for email-only requests. "
-                "Use for shipment, delivery, or tracking questions."
+                "Requires BOTH order_number AND email. If either is missing, ask for it "
+                "instead of calling this tool. Use for shipment, delivery, or tracking."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "order_number": {
                         "type": "string",
-                        "description": (
-                            "Order number such as #W001 or W001. Sufficient by itself — "
-                            "do not require email when this is provided."
-                        ),
+                        "description": "Order number such as #W001 or W001. Required with email.",
                     },
                     "email": {
                         "type": "string",
-                        "description": (
-                            "Customer email associated with the order. Sufficient by itself — "
-                            "do not require order number when this is provided."
-                        ),
+                        "description": "Customer email on the order. Required with order_number.",
                     },
                 },
+                "required": ["order_number", "email"],
             },
         },
     },
@@ -268,10 +270,11 @@ TOOL_DEFINITIONS = [
         "function": {
             "name": "request_human_handoff",
             "description": (
-                "Escalate to a human trail guide and mute this AI. "
-                "Try Skills 1–3 first. Call only for an explicit human request you cannot "
-                "fulfill, out-of-scope issues (returns, billing, claims), or after a real "
-                "failed attempt where the customer is still stuck."
+                "Queue a human trail guide. Does not mute this AI — you may still help "
+                "with catalog, orders, and Early Risers while they wait. Try Skills 1–3 "
+                "first. Call only for an explicit human request you cannot fulfill, "
+                "out-of-scope issues (returns, billing, claims), or after a real failed "
+                "attempt where the customer is still stuck."
             ),
             "parameters": {
                 "type": "object",
@@ -306,7 +309,7 @@ def run_tool(name: str, arguments: dict[str, Any]) -> tuple[dict[str, Any], list
         )
         return result, None
 
-    if name in ("search_catalog", "recommend_products"):
+    if name == "search_catalog":
         tags = arguments.get("tags")
         if isinstance(tags, str):
             tags = [tags]

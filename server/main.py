@@ -13,7 +13,6 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, File, Form, Header, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
-from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from server.agent import run_agent, run_nudge
@@ -72,8 +71,8 @@ class ChatResponse(BaseModel):
     message: str
     products: list[dict[str, Any]] | None = None
     handed_off: bool = False
-    muted: bool = False
     kind: str | None = None
+    debug: dict[str, Any] | None = None
 
 
 class ResetResponse(BaseModel):
@@ -93,6 +92,7 @@ class NudgeResponse(BaseModel):
     already_sent: bool = False
     skipped: bool = False
     reason: str | None = None
+    debug: dict[str, Any] | None = None
 
 
 class RatingRequest(BaseModel):
@@ -208,7 +208,7 @@ def nudge(x_session_id: str | None = Header(default=None)) -> NudgeResponse:
         )
 
     try:
-        text, updated = run_nudge(sessions[sid])
+        text, updated, debug = run_nudge(sessions[sid])
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
@@ -219,9 +219,10 @@ def nudge(x_session_id: str | None = Header(default=None)) -> NudgeResponse:
             "role": "assistant",
             "content": text,
             "kind": "nudge",
+            "debug": debug,
         }
     )
-    return NudgeResponse(session_id=sid, message=text, already_sent=False)
+    return NudgeResponse(session_id=sid, message=text, already_sent=False, debug=debug)
 
 
 @app.post("/api/rating", response_model=RatingResponse)
@@ -289,31 +290,28 @@ async def chat(
         }
     )
 
-    if meta.get("handed_off"):
-        return ChatResponse(
-            session_id=sid,
-            message="",
-            handed_off=True,
-            muted=True,
-            kind=None,
-        )
-
     user_content = _build_user_content(message, image_b64, image_mime)
     user_msg = {"role": "user", "content": user_content}
 
     try:
-        assistant_text, updated, products, flags = run_agent(sessions[sid], user_msg)
+        assistant_text, updated, products, flags = run_agent(
+            sessions[sid],
+            user_msg,
+            handoff_queued=bool(meta.get("handed_off")),
+            handoff_reason=meta.get("handoff_reason"),
+        )
     except Exception as exc:  # noqa: BLE001 — surface cleanly to UI
         ui_sessions[sid].pop()
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     sessions[sid] = updated
-    handed_off = bool(flags.get("handed_off"))
-    kind = "handoff" if handed_off else None
-    if handed_off:
+    handed_off = bool(meta.get("handed_off")) or bool(flags.get("handed_off"))
+    kind = "handoff" if flags.get("handed_off") else None
+    debug = flags.get("debug")
+    if flags.get("handed_off"):
         meta["handed_off"] = True
-        meta["handoff_reason"] = flags.get("handoff_reason")
-        meta["nudged"] = True  # do not idle-nudge after a live handoff
+        meta["handoff_reason"] = flags.get("handoff_reason") or meta.get("handoff_reason")
+        meta["nudged"] = True  # do not idle-nudge while a human is queued
 
     ui_sessions[sid].append(
         {
@@ -321,6 +319,7 @@ async def chat(
             "content": assistant_text,
             "products": products,
             "kind": kind,
+            "debug": debug,
         }
     )
 
@@ -329,8 +328,8 @@ async def chat(
         message=assistant_text,
         products=products,
         handed_off=handed_off,
-        muted=handed_off,
         kind=kind,
+        debug=debug,
     )
 
 
@@ -340,7 +339,3 @@ def serve_asset(filename: str) -> FileResponse:
     if not path.is_file():
         raise HTTPException(status_code=404, detail="Asset not found")
     return FileResponse(path)
-
-
-if ASSETS_DIR.is_dir():
-    app.mount("/static-assets", StaticFiles(directory=str(ASSETS_DIR)), name="static-assets")

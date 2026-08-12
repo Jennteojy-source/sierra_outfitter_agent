@@ -40,8 +40,3 @@ def save_rating(record: dict[str, Any]) -> dict[str, Any]:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     RATINGS_PATH.write_text(json.dumps(_ratings, indent=2))
     return row
-
-
-def all_ratings() -> list[dict[str, Any]]:
-    _load()
-    return list(_ratings)

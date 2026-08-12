@@ -13,12 +13,9 @@ import sys
 from datetime import datetime
 from typing import Any
 from unittest.mock import patch
-from zoneinfo import ZoneInfo
 
 from evals.dataset import EVAL_DATASET, EvalTestCase
 from server.agent import run_agent
-
-PT = ZoneInfo("America/Los_Angeles")
 
 
 class FixedDateTime(datetime):

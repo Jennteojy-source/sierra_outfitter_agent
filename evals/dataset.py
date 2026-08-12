@@ -166,45 +166,46 @@ EVAL_DATASET: list[EvalTestCase] = [
     ),
 
     # -------------------------------------------------------------------------
-    # Orders — either order number OR email is enough
+    # Orders — both order number AND email are required
     # -------------------------------------------------------------------------
     EvalTestCase(
-        id="ord_01_lookup_by_order_number",
+        id="ord_01_order_number_asks_email",
         category="order",
-        description="Lookup #W001 by order number alone (do not wait for email)",
+        description="Order number alone is not enough — ask for email",
         user_prompt="What's the status of order #W001?",
-        expected_tools=["lookup_order"],
-        forbidden_tools=["request_human_handoff"],
-        arg_checkers={
-            "lookup_order": lambda args: "w001" in str(args.get("order_number", "")).lower()
-        },
+        expected_tools=[],
+        forbidden_tools=["request_human_handoff", "early_riser_promo"],
         text_assertions=[
-            "delivered",
-            lambda text: _mentions_any(text, "backpack", "blaze", "energy", "sobp001"),
+            lambda text: "email" in text.lower(),
+            lambda text: "delivered" not in text.lower(),
         ],
     ),
     EvalTestCase(
-        id="ord_02_lookup_by_email",
+        id="ord_02_email_asks_order_number",
         category="order",
-        description="Lookup by email alone",
+        description="Email alone is not enough — ask for order number",
         user_prompt="Can you check my order under jane.smith@example.com?",
-        expected_tools=["lookup_order"],
-        arg_checkers={
-            "lookup_order": lambda args: "jane.smith@example.com" in str(args.get("email", "")).lower()
-        },
+        expected_tools=[],
+        forbidden_tools=["early_riser_promo"],
         text_assertions=[
-            lambda text: _mentions_any(text, "in-transit", "in transit"),
-            lambda text: _mentions_any(text, "jane", "pathfinder", "w002", "plane"),
+            lambda text: _mentions_any(text, "order number", "order #"),
+            lambda text: "in-transit" not in text.lower() and "in transit" not in text.lower(),
         ],
     ),
     EvalTestCase(
-        id="ord_03_tracking_link",
+        id="ord_03_tracking_with_both",
         category="order",
-        description="Tracking URL for in-transit #W002",
-        user_prompt="Where is my package for order #W002? Send me the tracking details.",
+        description="Tracking URL when both identifiers are given",
+        user_prompt=(
+            "Where is my package for order #W002? "
+            "My email is jane.smith@example.com. Send me the tracking details."
+        ),
         expected_tools=["lookup_order"],
         arg_checkers={
-            "lookup_order": lambda args: "w002" in str(args.get("order_number", "")).lower()
+            "lookup_order": lambda args: (
+                "w002" in str(args.get("order_number", "")).lower()
+                and "jane.smith@example.com" in str(args.get("email", "")).lower()
+            )
         },
         text_assertions=[
             "TRK987654321",
@@ -214,8 +215,8 @@ EVAL_DATASET: list[EvalTestCase] = [
     EvalTestCase(
         id="ord_04_not_found",
         category="order",
-        description="Unknown order number — honest miss, no invented tracking",
-        user_prompt="Check order status for order number #W999",
+        description="Unknown order + email — honest miss, no invented tracking",
+        user_prompt="Look up order number #W999 with email nobody@example.com",
         expected_tools=["lookup_order"],
         forbidden_tools=["request_human_handoff"],
         text_assertions=[
@@ -230,6 +231,9 @@ EVAL_DATASET: list[EvalTestCase] = [
                 "don't see",
                 "unable to find",
                 "double-check",
+                "doesn't match",
+                "do not match",
+                "no match",
             ),
             lambda text: "TRK" not in text,
         ],
@@ -238,10 +242,14 @@ EVAL_DATASET: list[EvalTestCase] = [
         id="ord_05_error_status_no_tracking",
         category="order",
         description="#W004 is error with no tracking — do not invent a number",
-        user_prompt="What's going on with order #W004?",
+        user_prompt="What's going on with order #W004 for bob.brown@example.com?",
         expected_tools=["lookup_order"],
+        forbidden_tools=["request_human_handoff"],
         arg_checkers={
-            "lookup_order": lambda args: "w004" in str(args.get("order_number", "")).lower()
+            "lookup_order": lambda args: (
+                "w004" in str(args.get("order_number", "")).lower()
+                and "bob.brown@example.com" in str(args.get("email", "")).lower()
+            )
         },
         text_assertions=[
             lambda text: _mentions_any(text, "error", "issue", "problem", "couldn't", "unable"),
@@ -251,12 +259,13 @@ EVAL_DATASET: list[EvalTestCase] = [
     EvalTestCase(
         id="ord_06_ask_for_identifier",
         category="order",
-        description="No order number or email yet — ask for either, do not guess",
+        description="No order number or email yet — ask for both, do not guess",
         user_prompt="Track my order please",
         expected_tools=[],
         forbidden_tools=["search_catalog", "early_riser_promo"],
         text_assertions=[
-            lambda text: _mentions_any(text, "order number", "email", "order #"),
+            lambda text: _mentions_any(text, "order number", "order #"),
+            lambda text: "email" in text.lower(),
         ],
     ),
 
@@ -308,7 +317,7 @@ EVAL_DATASET: list[EvalTestCase] = [
     EvalTestCase(
         id="hnd_01_explicit_refund",
         category="handoff",
-        description="Refund + human request is out of scope — escalate and mute",
+        description="Refund + human request is out of scope — queue a human, do not mute",
         user_prompt="I want to talk to a human. I need a refund for a damaged shipment.",
         expected_tools=["request_human_handoff"],
         forbidden_tools=["early_riser_promo"],
@@ -330,7 +339,7 @@ EVAL_DATASET: list[EvalTestCase] = [
         id="hnd_03_order_lookup_no_handoff",
         category="handoff",
         description="A normal order question should not escalate",
-        user_prompt="What's the status of order #W001?",
+        user_prompt="What's the status of order #W001 for john.doe@example.com?",
         expected_tools=["lookup_order"],
         forbidden_tools=["request_human_handoff"],
         expect_handed_off=False,

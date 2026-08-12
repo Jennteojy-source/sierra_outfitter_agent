@@ -7,18 +7,14 @@ from __future__ import annotations
 
 from datetime import datetime
 from unittest.mock import patch
-from zoneinfo import ZoneInfo
 
 from server.tools import (
     early_riser_promo,
     lookup_order,
-    recommend_products,
     request_human_handoff,
     run_tool,
     search_catalog,
 )
-
-PT = ZoneInfo("America/Los_Angeles")
 
 
 class FixedDateTime(datetime):
@@ -48,7 +44,7 @@ def make_dt_mock(iso_str: str):
 
 def test_lookup_order_w001_delivered():
     """Real Order #W001: John Doe, status 'delivered', tracking 'TRK123456789'."""
-    res = lookup_order(order_number="#W001")
+    res = lookup_order(order_number="#W001", email="john.doe@example.com")
     assert res["found"] is True
     assert len(res["orders"]) == 1
     order = res["orders"][0]
@@ -58,15 +54,28 @@ def test_lookup_order_w001_delivered():
     assert order["status"] == "delivered"
     assert order["tracking_number"] == "TRK123456789"
     assert order["tracking_url"] == "https://tools.usps.com/go/TrackConfirmAction?tLabels=TRK123456789"
-    # Products ordered: SOBP001 (Backpack), SOWB004 (Energy Drink)
     skus = [p["sku"] for p in order["products"]]
     assert "SOBP001" in skus
     assert "SOWB004" in skus
 
 
-def test_lookup_order_by_email_jane_smith():
+def test_lookup_order_requires_both_identifiers():
+    by_number = lookup_order(order_number="#W001")
+    assert by_number["found"] is False
+    assert by_number["need"] == ["email"]
+
+    by_email = lookup_order(email="jane.smith@example.com")
+    assert by_email["found"] is False
+    assert by_email["need"] == ["order_number"]
+
+    neither = lookup_order()
+    assert neither["found"] is False
+    assert set(neither["need"]) == {"order_number", "email"}
+
+
+def test_lookup_order_by_email_and_number_jane_smith():
     """Real Order #W002: Jane Smith, jane.smith@example.com, status 'in-transit'."""
-    res = lookup_order(email="jane.smith@example.com")
+    res = lookup_order(order_number="#W002", email="jane.smith@example.com")
     assert res["found"] is True
     order = res["orders"][0]
     assert order["order_number"] == "#W002"
@@ -77,7 +86,7 @@ def test_lookup_order_by_email_jane_smith():
 
 def test_lookup_order_w004_error_status():
     """Real Order #W004: Bob Brown, status 'error', null tracking."""
-    res = lookup_order(order_number="#W004")
+    res = lookup_order(order_number="#W004", email="bob.brown@example.com")
     assert res["found"] is True
     order = res["orders"][0]
     assert order["status"] == "error"
@@ -87,7 +96,7 @@ def test_lookup_order_w004_error_status():
 
 def test_lookup_order_case_insensitive_and_normalized():
     """Test order lookup with lowercase and stripped symbols 'w005'."""
-    res = lookup_order(order_number="w005")
+    res = lookup_order(order_number="w005", email="charlie.davis@example.com")
     assert res["found"] is True
     order = res["orders"][0]
     assert order["order_number"] == "#W005"
@@ -96,7 +105,7 @@ def test_lookup_order_case_insensitive_and_normalized():
 
 
 def test_lookup_order_not_found():
-    res = lookup_order(order_number="#W999999")
+    res = lookup_order(order_number="#W999999", email="nobody@example.com")
     assert res["found"] is False
     assert "No order found" in res["message"]
 
@@ -187,12 +196,6 @@ def test_search_catalog_exclude_skus():
     assert res["found"] is False or all(p["sku"] != "SOBP001" for p in res["products"])
 
 
-def test_recommend_products_alias():
-    res = recommend_products(query="skis", limit=2)
-    assert res["count"] <= 2
-    assert any(p["sku"] == "SOTN002" for p in res["products"])
-
-
 # =============================================================================
 # 3. EARLY RISERS DISCOUNT (early_riser_promo)
 # =============================================================================
@@ -231,7 +234,10 @@ def test_early_riser_promo_at_window_edges():
 # =============================================================================
 
 def test_run_tool_lookup_order():
-    res, products = run_tool("lookup_order", {"order_number": "#W001"})
+    res, products = run_tool(
+        "lookup_order",
+        {"order_number": "#W001", "email": "john.doe@example.com"},
+    )
     assert res["found"] is True
     assert products is None
 
@@ -252,7 +258,7 @@ def test_run_tool_unknown():
 def test_request_human_handoff():
     res = request_human_handoff(reason="explicit_request", summary="Wants a refund")
     assert res["handed_off"] is True
-    assert res["ai_muted"] is True
+    assert res["queued"] is True
     assert res["reason"] == "explicit_request"
 
 

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import './App.css'
 
 const SESSION_KEY = 'sierra_session_id'
+const DEBUG_KEY = 'sierra_debug_mode'
 const API = ''
 
 function getSessionId() {
@@ -194,6 +195,57 @@ function RatingChip({ sessionId, alreadyRated }) {
   )
 }
 
+function formatUsd(n) {
+  if (typeof n !== 'number' || Number.isNaN(n)) return 'n/a'
+  if (n < 0.0001) return '<$0.0001'
+  return `$${n.toFixed(4)}`
+}
+
+function DebugPanel({ debug }) {
+  if (!debug) {
+    return (
+      <div className="debug-panel">
+        <p className="debug-empty">No trace for this reply.</p>
+      </div>
+    )
+  }
+  const tools = debug.tool_calls || []
+  const usage = debug.usage || {}
+  return (
+    <div className="debug-panel">
+      <div className="debug-meta">
+        <span>
+          <strong>model</strong> {debug.model || 'unknown'}
+        </span>
+        <span>
+          <strong>cost</strong> {formatUsd(debug.cost_usd)}
+        </span>
+        <span>
+          <strong>tokens</strong> {usage.total_tokens ?? 0}
+          {usage.prompt_tokens || usage.completion_tokens
+            ? ` (${usage.prompt_tokens ?? 0} in / ${usage.completion_tokens ?? 0} out)`
+            : ''}
+        </span>
+        <span>
+          <strong>calls</strong> {debug.api_calls ?? 0}
+        </span>
+      </div>
+      {tools.length === 0 ? (
+        <p className="debug-empty">No tools this turn.</p>
+      ) : (
+        <ul className="debug-tools">
+          {tools.map((tc, i) => (
+            <li key={`${tc.name}-${i}`}>
+              <code className="debug-tool-name">{tc.name}</code>
+              <pre>{JSON.stringify(tc.arguments || {}, null, 2)}</pre>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  )
+}
+
 function ProductCarousel({ products }) {
   const trackRef = useRef(null)
   const [canScrollLeft, setCanScrollLeft] = useState(false)
@@ -254,6 +306,7 @@ export default function App() {
   const [waiting, setWaiting] = useState(false)
   const [error, setError] = useState('')
   const [handedOff, setHandedOff] = useState(false)
+  const [debugMode, setDebugMode] = useState(() => localStorage.getItem(DEBUG_KEY) === '1')
   const [rated, setRated] = useState(false)
   const [idleSeconds, setIdleSeconds] = useState(300)
   const bottomRef = useRef(null)
@@ -273,6 +326,9 @@ export default function App() {
   useEffect(() => {
     sessionRef.current = sessionId
   }, [sessionId])
+  useEffect(() => {
+    localStorage.setItem(DEBUG_KEY, debugMode ? '1' : '0')
+  }, [debugMode])
 
   function clearNudgeTimer() {
     if (nudgeTimerRef.current) {
@@ -296,7 +352,7 @@ export default function App() {
           if (m.some((msg) => msg.kind === 'nudge')) return m
           return [
             ...m,
-            { role: 'assistant', content: data.message, kind: 'nudge' },
+            { role: 'assistant', content: data.message, kind: 'nudge', debug: data.debug || null },
           ]
         })
       }
@@ -424,7 +480,7 @@ export default function App() {
 
   async function send() {
     const text = input.trim()
-    if ((!text && !image) || waiting || handedOff) return
+    if ((!text && !image) || waiting) return
 
     setWaiting(true)
     setError('')
@@ -462,11 +518,6 @@ export default function App() {
         clearNudgeTimer()
       }
 
-      if (data.muted && !data.message) {
-        clearImage()
-        return
-      }
-
       setMessages((m) => [
         ...m,
         {
@@ -474,6 +525,7 @@ export default function App() {
           content: data.message,
           products: data.products || null,
           kind: data.kind || null,
+          debug: data.debug || null,
         },
       ])
       clearImage()
@@ -494,7 +546,7 @@ export default function App() {
   }
 
   const suggestions = [
-    { label: 'Track order #W001', text: "What's the status of order #W001?" },
+    { label: 'Track order #W001', text: "What's the status of order #W001 for john.doe@example.com?" },
     { label: 'Hiking recommendations', text: 'Recommend hiking gear for a weekend trek' },
     { label: 'Early Risers promo', text: "I'd like the Early Risers Promotion please" },
   ]
@@ -514,15 +566,25 @@ export default function App() {
               <p>Adventure basecamp chat</p>
             </div>
           </div>
-          <button type="button" className="reset" onClick={resetChat} disabled={waiting}>
-            Reset
-          </button>
+          <div className="topbar-actions">
+            <button
+              type="button"
+              className={`debug-toggle ${debugMode ? 'on' : ''}`}
+              onClick={() => setDebugMode((v) => !v)}
+              aria-pressed={debugMode}
+            >
+              Debug {debugMode ? 'on' : 'off'}
+            </button>
+            <button type="button" className="reset" onClick={resetChat} disabled={waiting}>
+              Reset
+            </button>
+          </div>
         </header>
 
         {handedOff && (
           <div className="handoff-banner" role="status">
             <span className="handoff-dot" aria-hidden="true" />
-            Waiting for a human trail guide · AI is paused
+            Waiting for a human trail guide · I can still help with orders, gear, and Early Risers
           </div>
         )}
 
@@ -560,13 +622,13 @@ export default function App() {
               <div className={`bubble-row ${msg.role}`}>
                 <div
                   className={`bubble ${msg.role} ${msg.kind === 'nudge' ? 'nudge' : ''} ${
-                    msg.kind === 'handoff' || msg.kind === 'handoff_ack' ? 'handoff' : ''
+                    msg.kind === 'handoff' ? 'handoff' : ''
                   }`}
                 >
                   {msg.kind === 'nudge' && (
                     <p className="bubble-kicker">Check-in</p>
                   )}
-                  {(msg.kind === 'handoff' || msg.kind === 'handoff_ack') && (
+                  {msg.kind === 'handoff' && (
                     <p className="bubble-kicker">Human handoff</p>
                   )}
                   {msg.image && (
@@ -581,10 +643,13 @@ export default function App() {
               {msg.products?.length > 0 && (
                 <ProductCarousel products={msg.products} />
               )}
+              {debugMode && msg.role === 'assistant' && (
+                <DebugPanel debug={msg.debug} />
+              )}
             </div>
           ))}
 
-          {waiting && !handedOff && (
+          {waiting && (
             <div className="bubble-row assistant">
               <div className="bubble assistant waiting">Scouting the trail…</div>
             </div>
@@ -623,11 +688,11 @@ export default function App() {
             <div className="composer-row">
               <button
                 type="button"
-                className={`icon-btn attach-btn ${waiting || handedOff ? 'disabled' : ''}`}
+                className={`icon-btn attach-btn ${waiting ? 'disabled' : ''}`}
                 title="Attach image"
                 aria-label="Attach image"
                 onClick={openFilePicker}
-                disabled={waiting || handedOff}
+                disabled={waiting}
               >
                 <AttachIcon />
               </button>
@@ -636,21 +701,21 @@ export default function App() {
                 value={input}
                 onChange={(e) => {
                   setInput(e.target.value)
-                  if (!handedOff && !waiting) scheduleNudge()
+                  if (!waiting) scheduleNudge()
                 }}
                 onKeyDown={onKeyDown}
                 placeholder={
                   handedOff
-                    ? 'Waiting for a human trail guide…'
+                    ? 'A trail guide is queued — I can still help with orders, gear, or Early Risers…'
                     : 'Message your trail guide…'
                 }
-                disabled={waiting || handedOff}
+                disabled={waiting}
               />
               <button
                 type="button"
                 className="icon-btn send-btn"
                 onClick={send}
-                disabled={waiting || handedOff || (!input.trim() && !image)}
+                disabled={waiting || (!input.trim() && !image)}
                 aria-label="Send message"
               >
                 <SendIcon />
