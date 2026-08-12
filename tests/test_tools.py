@@ -101,6 +101,17 @@ def test_lookup_order_not_found():
     assert "No order found" in res["message"]
 
 
+def test_lookup_order_both_identifiers_must_match():
+    res = lookup_order(order_number="#W001", email="jane.smith@example.com")
+    assert res["found"] is False
+
+
+def test_lookup_order_both_identifiers_matching():
+    res = lookup_order(order_number="#W001", email="john.doe@example.com")
+    assert res["found"] is True
+    assert res["orders"][0]["order_number"] == "#W001"
+
+
 # =============================================================================
 # 2. CATALOG SEARCH (search_catalog) — Validated against product_catalog.json
 # =============================================================================
@@ -158,6 +169,19 @@ def test_search_catalog_hiking_backpacks():
     assert res["products"][0]["sku"] == "SOBP001"
 
 
+def test_search_catalog_hiking_boots_is_honest_miss():
+    res = search_catalog(query="hiking boots")
+    assert res["found"] is False
+    assert res["products"] == []
+
+
+def test_search_catalog_browse():
+    res = search_catalog(query="browse")
+    assert res["browse"] is True
+    assert res["found"] is True
+    assert res["count"] > 0
+
+
 def test_search_catalog_exclude_skus():
     res = search_catalog(query="hiking backpack", exclude_skus=["SOBP001"])
     assert res["found"] is False or all(p["sku"] != "SOBP001" for p in res["products"])
@@ -193,6 +217,15 @@ def test_early_riser_promo_outside_window():
         assert "8:00 and 10:00 AM" in res["reason"]
 
 
+def test_early_riser_promo_at_window_edges():
+    with patch("server.tools.datetime", make_dt_mock("2026-08-12T08:00:00-07:00")):
+        assert early_riser_promo()["valid"] is True
+    with patch("server.tools.datetime", make_dt_mock("2026-08-12T09:59:00-07:00")):
+        assert early_riser_promo()["valid"] is True
+    with patch("server.tools.datetime", make_dt_mock("2026-08-12T10:00:00-07:00")):
+        assert early_riser_promo()["valid"] is False
+
+
 # =============================================================================
 # 4. RUN_TOOL DISPATCHER
 # =============================================================================
@@ -221,3 +254,19 @@ def test_request_human_handoff():
     assert res["handed_off"] is True
     assert res["ai_muted"] is True
     assert res["reason"] == "explicit_request"
+
+
+def test_request_human_handoff_unknown_reason_defaults():
+    res = request_human_handoff(reason="whatever")
+    assert res["handed_off"] is True
+    assert res["reason"] == "explicit_request"
+
+
+def test_run_tool_handoff():
+    res, products = run_tool(
+        "request_human_handoff",
+        {"reason": "out_of_scope", "summary": "Billing dispute"},
+    )
+    assert res["handed_off"] is True
+    assert res["reason"] == "out_of_scope"
+    assert products is None

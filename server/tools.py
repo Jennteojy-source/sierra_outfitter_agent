@@ -203,7 +203,8 @@ TOOL_DEFINITIONS = [
                 "description, SKU, and stock. Use for recommendations, 'do you sell X?', "
                 "tag browsing, and in-stock questions. Prefer this over inventing products. "
                 "If found=false, say we don't carry that item — do not invent alternatives "
-                "as if they matched the query."
+                "as if they matched the query. For 'what do you sell' / 'I want to buy "
+                "something', call with query 'browse' and only mention returned products."
             ),
             "parameters": {
                 "type": "object",

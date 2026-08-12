@@ -62,30 +62,31 @@ def run_single_test(test_case: EvalTestCase) -> dict[str, Any]:
     """Runs a single test case and returns evaluation results."""
     user_msg = {"role": "user", "content": test_case.user_prompt}
 
-    # Time mocking if required
+    def _invoke():
+        return run_agent(history=[], user_message=user_msg)
+
     if test_case.time_mock_pt:
         mock_dt = make_datetime_mock(test_case.time_mock_pt)
         with patch("server.tools.datetime", mock_dt), patch("server.prompts.datetime", mock_dt):
-            assistant_text, history, products, _flags = run_agent(history=[], user_message=user_msg)
+            assistant_text, history, products, flags = _invoke()
     else:
-        assistant_text, history, products, _flags = run_agent(history=[], user_message=user_msg)
+        assistant_text, history, products, flags = _invoke()
 
     tool_calls = extract_tool_calls(history)
     executed_tool_names = [tc["name"] for tc in tool_calls]
 
     failures: list[str] = []
 
-    # 1. Check expected tools
     for exp_tool in test_case.expected_tools:
         if exp_tool not in executed_tool_names:
-            failures.append(f"Expected tool '{exp_tool}' was NOT called. Executed tools: {executed_tool_names}")
+            failures.append(
+                f"Expected tool '{exp_tool}' was NOT called. Executed tools: {executed_tool_names}"
+            )
 
-    # 2. Check forbidden tools
     for forb_tool in test_case.forbidden_tools:
         if forb_tool in executed_tool_names:
             failures.append(f"Forbidden tool '{forb_tool}' WAS called!")
 
-    # 3. Check tool arguments
     for tool_name, checker in test_case.arg_checkers.items():
         matching_args = [tc["args"] for tc in tool_calls if tc["name"] == tool_name]
         if not matching_args:
@@ -93,19 +94,27 @@ def run_single_test(test_case: EvalTestCase) -> dict[str, Any]:
         else:
             arg_passed = any(checker(args) for args in matching_args)
             if not arg_passed:
-                failures.append(f"Tool '{tool_name}' argument check failed for args: {matching_args}")
+                failures.append(
+                    f"Tool '{tool_name}' argument check failed for args: {matching_args}"
+                )
 
-    # 4. Check text assertions
-    for assertion in test_case.text_assertions:
+    for i, assertion in enumerate(test_case.text_assertions, 1):
         if isinstance(assertion, str):
             if assertion.lower() not in assistant_text.lower():
                 failures.append(f"Response missing expected text substring: '{assertion}'")
         elif callable(assertion):
+            label = getattr(assertion, "__name__", f"assertion_{i}")
             try:
                 if not assertion(assistant_text):
-                    failures.append("Response content assertion function returned False.")
+                    failures.append(f"Text assertion '{label}' returned False.")
             except Exception as e:
-                failures.append(f"Response content assertion error: {e}")
+                failures.append(f"Text assertion '{label}' error: {e}")
+
+    handed_off = bool(flags.get("handed_off"))
+    if test_case.expect_handed_off is True and not handed_off:
+        failures.append("Expected handed_off=True but agent stayed in AI mode.")
+    if test_case.expect_handed_off is False and handed_off:
+        failures.append("Expected handed_off=False but agent escalated to a human.")
 
     passed = len(failures) == 0
     return {
@@ -117,6 +126,7 @@ def run_single_test(test_case: EvalTestCase) -> dict[str, Any]:
         "assistant_text": assistant_text,
         "executed_tools": executed_tool_names,
         "tool_calls": tool_calls,
+        "handed_off": handed_off,
         "failures": failures,
     }
 
@@ -183,7 +193,11 @@ def run_evals(category_filter: str | None = None, test_id_filter: str | None = N
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Sierra Outfitter Agent Evaluation Runner")
-    parser.add_argument("--category", choices=["catalog", "order", "promo"], help="Filter by category")
+    parser.add_argument(
+        "--category",
+        choices=["catalog", "order", "promo", "handoff"],
+        help="Filter by category",
+    )
     parser.add_argument("--case-id", help="Filter by test case ID")
 
     args = parser.parse_args()

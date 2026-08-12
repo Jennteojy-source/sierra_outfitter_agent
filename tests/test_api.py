@@ -147,7 +147,8 @@ def test_handoff_mutes_agent_until_reset():
             headers={"x-session-id": sid},
         )
         assert note.json()["muted"] is True
-        assert note.json()["kind"] == "handoff_ack"
+        assert note.json()["message"] == ""
+        assert note.json()["kind"] is None
         assert mock_agent.call_count == 1
 
     reset = client.post("/api/reset", headers={"x-session-id": sid})

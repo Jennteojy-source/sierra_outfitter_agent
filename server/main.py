@@ -40,10 +40,6 @@ session_meta: dict[str, dict[str, Any]] = {}
 
 ASSETS_DIR = ROOT / "assets"
 MAX_IMAGE_BYTES = 8 * 1024 * 1024
-HANDOFF_NOTE_ACK = (
-    "Got it — I'll pass that along to the team. "
-    "Hang tight, a human trail guide will pick this up shortly."
-)
 
 
 def _idle_seconds() -> int:
@@ -127,10 +123,7 @@ def _meta(sid: str) -> dict[str, Any]:
 def _has_exchange(sid: str) -> bool:
     ui = ui_sessions.get(sid, [])
     has_user = any(m.get("role") == "user" for m in ui)
-    has_asst = any(
-        m.get("role") == "assistant" and m.get("kind") not in ("handoff_ack",)
-        for m in ui
-    )
+    has_asst = any(m.get("role") == "assistant" for m in ui)
     return has_user and has_asst
 
 
@@ -297,19 +290,12 @@ async def chat(
     )
 
     if meta.get("handed_off"):
-        ui_sessions[sid].append(
-            {
-                "role": "assistant",
-                "content": HANDOFF_NOTE_ACK,
-                "kind": "handoff_ack",
-            }
-        )
         return ChatResponse(
             session_id=sid,
-            message=HANDOFF_NOTE_ACK,
+            message="",
             handed_off=True,
             muted=True,
-            kind="handoff_ack",
+            kind=None,
         )
 
     user_content = _build_user_content(message, image_b64, image_mime)

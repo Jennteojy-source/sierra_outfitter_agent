@@ -73,8 +73,6 @@ SYNONYMS: dict[str, list[str]] = {
     "drink": ["beverage", "energy"],
     "beverage": ["drink"],
     "protein": ["bars", "food"],
-    "shoes": ["footwear", "boots"],
-    "boots": ["shoes", "footwear"],
     "cloak": ["invisibility", "stealth"],
     "jetpack": ["flight", "flying"],
     "plane": ["aircraft", "flight", "aviation"],
@@ -85,6 +83,25 @@ SYNONYMS: dict[str, list[str]] = {
     "hike": ["hiking", "outdoor"],
     "winter": ["snow", "ski", "skis"],
     "snow": ["winter", "ski", "skis"],
+}
+
+# Activity / adjective tokens that may be missing from the index without
+# turning the whole query into a miss (e.g. "cold weather hiking").
+MODIFIERS = {
+    "hiking",
+    "hike",
+    "winter",
+    "snow",
+    "outdoor",
+    "outdoors",
+    "adventure",
+    "trail",
+    "cold",
+    "weather",
+    "warm",
+    "rugged",
+    "durable",
+    "lightweight",
 }
 
 FIELD_WEIGHTS = {
@@ -222,6 +239,30 @@ class CatalogIndex:
         excluded = {s.strip().upper() for s in (exclude_skus or []) if s and s.strip()}
         limit = max(1, min(int(limit or 4), 6))
 
+        browse = query_lower in {"", "browse", "catalog", "all"} or (
+            not tokens and not requested_tags
+        )
+        if browse:
+            return self._browse(limit=limit, in_stock_only=in_stock_only, excluded=excluded)
+
+        unknown = [
+            t
+            for t in tokens
+            if t not in MODIFIERS and not self._term_indexed(t)
+        ]
+        if unknown:
+            return self._miss(
+                query,
+                expanded,
+                in_stock_only,
+                requested_tags,
+                excluded,
+                extra=(
+                    f"Unknown product term(s): {', '.join(unknown)}. "
+                    "Do not substitute unrelated items."
+                ),
+            )
+
         scores: dict[str, float] = defaultdict(float)
         matched: dict[str, list[str]] = defaultdict(list)
 
@@ -312,6 +353,7 @@ class CatalogIndex:
             "count": len(products),
             "found": found,
             "fallback": False,
+            "browse": False,
             "message": None
             if found
             else (
@@ -320,6 +362,84 @@ class CatalogIndex:
             ),
             "available_tags": self.all_tags,
             "products": products,
+        }
+
+    def _term_indexed(self, term: str) -> bool:
+        for variant in _stem_variants(term):
+            if self.inverted.get(variant):
+                return True
+        return False
+
+    def _browse(
+        self,
+        *,
+        limit: int,
+        in_stock_only: bool,
+        excluded: set[str],
+    ) -> dict[str, Any]:
+        docs = [
+            d
+            for d in self.docs.values()
+            if d.sku not in excluded and (not in_stock_only or d.inventory > 0)
+        ]
+        docs.sort(key=lambda d: (-d.inventory, d.name))
+        products = [
+            {
+                "sku": d.sku,
+                "name": d.name,
+                "image": _image_url(d.product),
+                "description": d.description,
+                "tags": d.tags,
+                "inventory": d.inventory,
+                "in_stock": d.inventory > 0,
+                "match_score": 0.0,
+                "matched_on": ["browse"],
+            }
+            for d in docs[:limit]
+        ]
+        return {
+            "query": "browse",
+            "expanded_terms": [],
+            "in_stock_only": in_stock_only,
+            "tags_filter": [],
+            "excluded_skus": sorted(excluded),
+            "count": len(products),
+            "found": len(products) > 0,
+            "fallback": False,
+            "browse": True,
+            "message": (
+                "Open-ended browse of the live assortment. Only mention these products "
+                f"and tags: {', '.join(self.all_tags)}."
+            ),
+            "available_tags": self.all_tags,
+            "products": products,
+        }
+
+    def _miss(
+        self,
+        query: str,
+        expanded: list[str],
+        in_stock_only: bool,
+        requested_tags: list[str],
+        excluded: set[str],
+        extra: str,
+    ) -> dict[str, Any]:
+        return {
+            "query": query,
+            "expanded_terms": expanded,
+            "in_stock_only": in_stock_only,
+            "tags_filter": requested_tags,
+            "excluded_skus": sorted(excluded),
+            "count": 0,
+            "found": False,
+            "fallback": False,
+            "browse": False,
+            "message": (
+                f"{extra} We don't sell that item. "
+                f"Available category tags: {', '.join(self.all_tags[:12])}."
+            ),
+            "available_tags": self.all_tags,
+            "products": [],
         }
 
 

@@ -424,7 +424,7 @@ export default function App() {
 
   async function send() {
     const text = input.trim()
-    if ((!text && !image) || waiting) return
+    if ((!text && !image) || waiting || handedOff) return
 
     setWaiting(true)
     setError('')
@@ -460,6 +460,11 @@ export default function App() {
         handedOffRef.current = true
         nudgedRef.current = true
         clearNudgeTimer()
+      }
+
+      if (data.muted && !data.message) {
+        clearImage()
+        return
       }
 
       setMessages((m) => [
@@ -579,11 +584,9 @@ export default function App() {
             </div>
           ))}
 
-          {waiting && (
+          {waiting && !handedOff && (
             <div className="bubble-row assistant">
-              <div className="bubble assistant waiting">
-                {handedOff ? 'Passing that along…' : 'Scouting the trail…'}
-              </div>
+              <div className="bubble assistant waiting">Scouting the trail…</div>
             </div>
           )}
           <div ref={bottomRef} />
@@ -638,16 +641,16 @@ export default function App() {
                 onKeyDown={onKeyDown}
                 placeholder={
                   handedOff
-                    ? 'Leave a note for the team…'
+                    ? 'Waiting for a human trail guide…'
                     : 'Message your trail guide…'
                 }
-                disabled={waiting}
+                disabled={waiting || handedOff}
               />
               <button
                 type="button"
                 className="icon-btn send-btn"
                 onClick={send}
-                disabled={waiting || (!input.trim() && !image)}
+                disabled={waiting || handedOff || (!input.trim() && !image)}
                 aria-label="Send message"
               >
                 <SendIcon />
