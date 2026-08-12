@@ -27,6 +27,21 @@ def test_eval_cases_are_well_formed():
             assert tool in VALID_TOOLS, f"{case.id}: unknown tool {tool}"
         overlap = set(case.expected_tools) & set(case.forbidden_tools)
         assert not overlap, f"{case.id} expects and forbids {overlap}"
+        for follow in case.follow_ups:
+            assert follow.strip(), f"{case.id}: empty follow-up"
+        for tool in case.forbidden_until_last:
+            assert tool in VALID_TOOLS, f"{case.id}: unknown tool {tool}"
+        if case.follow_ups:
+            assert case.forbidden_until_last, f"{case.id}: multi-turn case should set forbidden_until_last"
+
+
+def test_eval_covers_multi_turn_order_lookup():
+    multi = [c for c in EVAL_DATASET if c.follow_ups]
+    assert len(multi) >= 3
+    assert all(c.category == "order" for c in multi)
+    assert any(c.id == "ord_07_number_then_email" for c in multi)
+    assert any(c.id == "ord_08_email_then_number" for c in multi)
+    assert any("lookup_order" in c.forbidden_until_last for c in multi)
 
 
 def test_eval_covers_core_agent_skills():

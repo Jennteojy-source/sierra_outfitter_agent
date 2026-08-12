@@ -56,6 +56,7 @@ def test_handoff_skill_in_prompt():
     prompt = build_system_prompt()
     assert "request_human_handoff" in prompt
     assert "Last resort" in prompt
+    assert "the tool decides eligibility" in prompt.lower() or "Do not decide eligibility yourself" in prompt
 
 
 def test_nudge_prompt_is_check_in_not_full_manual():

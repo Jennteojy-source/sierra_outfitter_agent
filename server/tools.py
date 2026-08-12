@@ -127,29 +127,52 @@ def search_catalog(
     )
 
 
-def early_riser_promo() -> dict[str, Any]:
+_EARLY_RISERS_RE = re.compile(r"early[\s-]*risers?", re.IGNORECASE)
+
+
+def _explicit_early_risers(customer_text: str | None) -> bool:
+    return bool(_EARLY_RISERS_RE.search(customer_text or ""))
+
+
+def early_riser_promo(customer_text: str | None = None) -> dict[str, Any]:
+    """Mint a code only for an explicit Early Risers ask inside the PT window.
+
+    Eligibility is enforced here, not by the model. `customer_text` must be the
+    actual customer utterance (injected by the agent loop), not an LLM argument.
+    """
     now = datetime.now(PT)
-    in_window = now.hour in (8, 9)  # 8:00 inclusive through 9:59
-
-    if not in_window:
-        return {
-            "valid": False,
-            "code": None,
-            "timezone": "America/Los_Angeles",
-            "current_time": now.isoformat(),
-            "window": "08:00–10:00 America/Los_Angeles",
-            "reason": "Early Risers Promotion is only available between 8:00 and 10:00 AM Pacific Time.",
-        }
-
-    code = f"EARLY-{uuid.uuid4().hex[:8].upper()}"
-    return {
-        "valid": True,
-        "code": code,
-        "discount": "10%",
+    base = {
+        "code": None,
         "timezone": "America/Los_Angeles",
         "current_time": now.isoformat(),
         "window": "08:00–10:00 America/Los_Angeles",
-        "reason": "Customer is within the Early Risers window; unique code generated.",
+    }
+
+    if not _explicit_early_risers(customer_text):
+        return {
+            **base,
+            "valid": False,
+            "reason": (
+                "Customer did not explicitly request the Early Risers Promotion by name. "
+                "Do not mint a code for a generic coupon or discount ask. You may mention "
+                "that Early Risers exists and is available 8:00–10:00 AM Pacific."
+            ),
+        }
+
+    in_window = now.hour in (8, 9)  # 8:00 inclusive through 9:59
+    if not in_window:
+        return {
+            **base,
+            "valid": False,
+            "reason": "Early Risers Promotion is only available between 8:00 and 10:00 AM Pacific Time.",
+        }
+
+    return {
+        **base,
+        "valid": True,
+        "code": f"EARLY-{uuid.uuid4().hex[:8].upper()}",
+        "discount": "10%",
+        "reason": "Customer explicitly requested Early Risers inside the window; unique code generated.",
     }
 
 
@@ -255,9 +278,10 @@ TOOL_DEFINITIONS = [
         "function": {
             "name": "early_riser_promo",
             "description": (
-                "Skill: Early Risers Discount. Generate a unique 10% Early Risers code. "
-                "ONLY call when the customer explicitly asks for Early Risers. "
-                "Tool enforces 8:00–10:00 AM Pacific. Do not invent codes."
+                "Skill: Early Risers Discount. Call for any coupon, discount, or Early "
+                "Risers request. The tool reads the customer's actual message and only "
+                "mints a unique 10% code when they explicitly asked for Early Risers "
+                "AND it is 8:00–10:00 AM Pacific. Do not invent codes; report the tool result."
             ),
             "parameters": {
                 "type": "object",
@@ -300,7 +324,12 @@ TOOL_DEFINITIONS = [
 ]
 
 
-def run_tool(name: str, arguments: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, Any]] | None]:
+def run_tool(
+    name: str,
+    arguments: dict[str, Any],
+    *,
+    customer_text: str | None = None,
+) -> tuple[dict[str, Any], list[dict[str, Any]] | None]:
     """Run a tool. Returns (result_json, optional product cards for UI)."""
     if name == "lookup_order":
         result = lookup_order(
@@ -327,7 +356,7 @@ def run_tool(name: str, arguments: dict[str, Any]) -> tuple[dict[str, Any], list
         return result, products if products else None
 
     if name == "early_riser_promo":
-        result = early_riser_promo()
+        result = early_riser_promo(customer_text=customer_text)
         return result, None
 
     if name == "request_human_handoff":

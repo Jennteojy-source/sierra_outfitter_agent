@@ -1,8 +1,10 @@
 """
 Evaluation dataset for the Sierra Outfitters agent.
 
-Single-turn cases that check tool choice, arguments, and reply content
-against the live catalog, orders, promo window, and handoff rules.
+Cases check tool choice, arguments, and reply content against the live
+catalog, orders, promo window, and handoff rules. Order lookup also has
+multi-turn cases (`follow_ups`) that collect email and order number
+across messages.
 """
 
 from __future__ import annotations
@@ -19,9 +21,12 @@ class EvalTestCase:
     user_prompt: str
     expected_tools: list[str]
     forbidden_tools: list[str] = field(default_factory=list)
+    follow_ups: list[str] = field(default_factory=list)
+    forbidden_until_last: list[str] = field(default_factory=list)
     time_mock_pt: str | None = None
     arg_checkers: dict[str, Callable[[dict[str, Any]], bool]] = field(default_factory=dict)
     text_assertions: list[str | Callable[[str], bool]] = field(default_factory=list)
+    first_turn_assertions: list[str | Callable[[str], bool]] = field(default_factory=list)
     expect_handed_off: bool | None = None
 
 
@@ -268,6 +273,93 @@ EVAL_DATASET: list[EvalTestCase] = [
             lambda text: "email" in text.lower(),
         ],
     ),
+    EvalTestCase(
+        id="ord_07_number_then_email",
+        category="order",
+        description="Multi-turn: order number first, email second, then lookup",
+        user_prompt="What's the status of order #W001?",
+        follow_ups=["john.doe@example.com"],
+        expected_tools=["lookup_order"],
+        forbidden_tools=["request_human_handoff", "early_riser_promo"],
+        forbidden_until_last=["lookup_order"],
+        arg_checkers={
+            "lookup_order": lambda args: (
+                "w001" in str(args.get("order_number", "")).lower()
+                and "john.doe@example.com" in str(args.get("email", "")).lower()
+            )
+        },
+        first_turn_assertions=[
+            lambda text: "email" in text.lower(),
+            lambda text: "delivered" not in text.lower(),
+        ],
+        text_assertions=[
+            "delivered",
+            "TRK123456789",
+            lambda text: "usps.com" in text.lower() or "track" in text.lower(),
+        ],
+    ),
+    EvalTestCase(
+        id="ord_08_email_then_number",
+        category="order",
+        description="Multi-turn: email first, order number second, then lookup",
+        user_prompt="Can you check my order under jane.smith@example.com?",
+        follow_ups=["It's #W002"],
+        expected_tools=["lookup_order"],
+        forbidden_tools=["early_riser_promo"],
+        forbidden_until_last=["lookup_order"],
+        arg_checkers={
+            "lookup_order": lambda args: (
+                "w002" in str(args.get("order_number", "")).lower()
+                and "jane.smith@example.com" in str(args.get("email", "")).lower()
+            )
+        },
+        first_turn_assertions=[
+            lambda text: _mentions_any(text, "order number", "order #"),
+            lambda text: "in-transit" not in text.lower() and "in transit" not in text.lower(),
+        ],
+        text_assertions=[
+            lambda text: _mentions_any(text, "in-transit", "in transit", "transit"),
+            "TRK987654321",
+        ],
+    ),
+    EvalTestCase(
+        id="ord_09_mismatch_after_collecting",
+        category="order",
+        description="Multi-turn: both identifiers collected, but they do not match",
+        user_prompt="Track order #W001 please",
+        follow_ups=["jane.smith@example.com"],
+        expected_tools=["lookup_order"],
+        forbidden_tools=["request_human_handoff"],
+        forbidden_until_last=["lookup_order"],
+        arg_checkers={
+            "lookup_order": lambda args: (
+                "w001" in str(args.get("order_number", "")).lower()
+                and "jane.smith@example.com" in str(args.get("email", "")).lower()
+            )
+        },
+        first_turn_assertions=[
+            lambda text: "email" in text.lower(),
+            lambda text: "delivered" not in text.lower(),
+        ],
+        text_assertions=[
+            lambda text: _mentions_any(
+                text,
+                "no order",
+                "couldn't find",
+                "could not find",
+                "not found",
+                "cannot find",
+                "can't find",
+                "don't see",
+                "unable to find",
+                "doesn't match",
+                "do not match",
+                "no match",
+                "don't match",
+            ),
+            lambda text: "TRK" not in text,
+        ],
+    ),
 
     # -------------------------------------------------------------------------
     # Early Risers
@@ -291,7 +383,7 @@ EVAL_DATASET: list[EvalTestCase] = [
         description="Explicit request outside the window — tool enforces, no invented code",
         user_prompt="Can I get the Early Risers discount code?",
         time_mock_pt="2026-08-12T14:15:00-07:00",
-        expected_tools=[],  # Tool call optional as agent prompt has live clock
+        expected_tools=["early_riser_promo"],  # Tool enforces the window
         forbidden_tools=["request_human_handoff"],
         text_assertions=[
             lambda text: _mentions_any(text, "8:00", "8 am", "10:00", "10 am", "pacific", "morning"),
@@ -303,8 +395,8 @@ EVAL_DATASET: list[EvalTestCase] = [
         category="promo",
         description="Generic coupon ask must not mint an Early Risers code",
         user_prompt="Do you have any general store coupons or discount codes available?",
-        expected_tools=[],
-        forbidden_tools=["early_riser_promo"],
+        expected_tools=["early_riser_promo"],
+        forbidden_tools=["request_human_handoff"],
         text_assertions=[
             lambda text: "EARLY-" not in text,
             lambda text: _mentions_any(text, "early riser", "8:00", "10:00", "promo", "discount"),

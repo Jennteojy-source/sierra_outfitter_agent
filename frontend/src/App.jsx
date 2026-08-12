@@ -4,6 +4,8 @@ import './App.css'
 const SESSION_KEY = 'sierra_session_id'
 const DEBUG_KEY = 'sierra_debug_mode'
 const API = ''
+const MAX_MESSAGE_CHARS = 8000
+const MAX_IMAGE_BYTES = 8 * 1024 * 1024
 
 function getSessionId() {
   let id = localStorage.getItem(SESSION_KEY)
@@ -425,6 +427,12 @@ export default function App() {
   function onPickImage(e) {
     const file = e.target.files?.[0]
     if (!file) return
+    if (file.size > MAX_IMAGE_BYTES) {
+      setError('Image too large (max 8MB). Try a smaller photo.')
+      if (fileRef.current) fileRef.current.value = ''
+      return
+    }
+    setError('')
     setImage(file)
     setPreview(URL.createObjectURL(file))
   }
@@ -481,6 +489,10 @@ export default function App() {
   async function send() {
     const text = input.trim()
     if ((!text && !image) || waiting) return
+    if (text.length > MAX_MESSAGE_CHARS) {
+      setError(`Message too long (max ${MAX_MESSAGE_CHARS} characters).`)
+      return
+    }
 
     setWaiting(true)
     setError('')
@@ -699,6 +711,7 @@ export default function App() {
               <textarea
                 rows={1}
                 value={input}
+                maxLength={MAX_MESSAGE_CHARS}
                 onChange={(e) => {
                   setInput(e.target.value)
                   if (!waiting) scheduleNudge()

@@ -18,6 +18,7 @@ ROOT = Path(__file__).resolve().parent.parent
 load_dotenv(ROOT / ".env")
 
 MAX_HISTORY_MESSAGES = 25
+MAX_MESSAGE_CHARS = 8_000
 MAX_TOOL_ITERS = 5
 MODEL = os.getenv("OPENAI_MODEL", "gpt-4o")
 
@@ -38,6 +39,25 @@ def _client() -> OpenAI:
     return OpenAI(api_key=api_key)
 
 
+def _content_text(content: Any) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for part in content:
+            if isinstance(part, dict) and part.get("type") == "text":
+                parts.append(str(part.get("text") or ""))
+        return " ".join(parts).strip()
+    return ""
+
+
+def _last_user_text(history: list[dict[str, Any]]) -> str:
+    for msg in reversed(history):
+        if msg.get("role") == "user":
+            return _content_text(msg.get("content"))
+    return ""
+
+
 def _trim_history(history: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Keep the last N messages, but never orphan a tool message without its assistant call."""
     if len(history) <= MAX_HISTORY_MESSAGES:
@@ -51,6 +71,29 @@ def _trim_history(history: list[dict[str, Any]]) -> list[dict[str, Any]]:
         while trimmed and trimmed[0].get("role") == "tool":
             trimmed = trimmed[1:]
     return trimmed
+
+
+def _drop_old_images(history: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Keep at most the latest user image so prior data-URLs cannot blow the context window."""
+    last_user = None
+    for i in range(len(history) - 1, -1, -1):
+        if history[i].get("role") == "user":
+            last_user = i
+            break
+
+    cleaned: list[dict[str, Any]] = []
+    for i, msg in enumerate(history):
+        content = msg.get("content")
+        if i != last_user and isinstance(content, list):
+            text = _content_text(content) or "[Customer uploaded an image.]"
+            cleaned.append({**msg, "content": text})
+        else:
+            cleaned.append(msg)
+    return cleaned
+
+
+def _messages_for_model(history: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return _drop_old_images(_trim_history(history))
 
 
 def run_agent(
@@ -85,7 +128,7 @@ def run_agent(
                 ),
             }
         ]
-        messages.extend(_trim_history(working))
+        messages.extend(_messages_for_model(working))
 
         response = client.chat.completions.create(
             model=MODEL,
@@ -123,7 +166,11 @@ def run_agent(
                 args = json.loads(tc.function.arguments or "{}")
             except json.JSONDecodeError:
                 args = {}
-            result, products = run_tool(tc.function.name, args)
+            result, products = run_tool(
+                tc.function.name,
+                args,
+                customer_text=_last_user_text(working),
+            )
             if products:
                 products_for_ui = products
             debug_tools.append(
@@ -165,7 +212,7 @@ def run_agent(
         "handoff_reason": new_handoff_reason,
         "debug": build_debug(model=MODEL, tool_calls=debug_tools, usage=usage),
     }
-    return assistant_text, working, products_for_ui, flags
+    return assistant_text, _drop_old_images(working), products_for_ui, flags
 
 
 def run_nudge(history: list[dict[str, Any]]) -> tuple[str, list[dict[str, Any]], dict[str, Any]]:
@@ -173,7 +220,7 @@ def run_nudge(history: list[dict[str, Any]]) -> tuple[str, list[dict[str, Any]],
     client = _client()
     usage = empty_usage()
     messages = [{"role": "system", "content": build_nudge_prompt()}]
-    messages.extend(_trim_history(history))
+    messages.extend(_messages_for_model(history))
     messages.append(
         {
             "role": "user",

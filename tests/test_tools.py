@@ -204,7 +204,7 @@ def test_early_riser_promo_inside_window():
     # 8:30 AM Pacific Time
     mock_dt = make_dt_mock("2026-08-12T08:30:00-07:00")
     with patch("server.tools.datetime", mock_dt):
-        res = early_riser_promo()
+        res = early_riser_promo(customer_text="I'd like the Early Risers Promotion please")
         assert res["valid"] is True
         assert res["code"].startswith("EARLY-")
         assert res["discount"] == "10%"
@@ -214,19 +214,43 @@ def test_early_riser_promo_outside_window():
     # 2:30 PM Pacific Time
     mock_dt = make_dt_mock("2026-08-12T14:30:00-07:00")
     with patch("server.tools.datetime", mock_dt):
-        res = early_riser_promo()
+        res = early_riser_promo(customer_text="Can I get the Early Risers discount code?")
         assert res["valid"] is False
         assert res["code"] is None
         assert "8:00 and 10:00 AM" in res["reason"]
 
 
 def test_early_riser_promo_at_window_edges():
+    ask = "Early Risers promo please"
     with patch("server.tools.datetime", make_dt_mock("2026-08-12T08:00:00-07:00")):
-        assert early_riser_promo()["valid"] is True
+        assert early_riser_promo(customer_text=ask)["valid"] is True
     with patch("server.tools.datetime", make_dt_mock("2026-08-12T09:59:00-07:00")):
-        assert early_riser_promo()["valid"] is True
+        assert early_riser_promo(customer_text=ask)["valid"] is True
     with patch("server.tools.datetime", make_dt_mock("2026-08-12T10:00:00-07:00")):
-        assert early_riser_promo()["valid"] is False
+        assert early_riser_promo(customer_text=ask)["valid"] is False
+
+
+def test_early_riser_promo_rejects_generic_coupon_ask_inside_window():
+    mock_dt = make_dt_mock("2026-08-12T08:30:00-07:00")
+    with patch("server.tools.datetime", mock_dt):
+        res = early_riser_promo(
+            customer_text="Do you have any general store coupons or discount codes available?"
+        )
+        assert res["valid"] is False
+        assert res["code"] is None
+        assert "explicitly" in res["reason"].lower()
+
+
+def test_run_tool_early_riser_uses_customer_text_not_llm_args():
+    mock_dt = make_dt_mock("2026-08-12T08:30:00-07:00")
+    with patch("server.tools.datetime", mock_dt):
+        res, _ = run_tool(
+            "early_riser_promo",
+            {},
+            customer_text="any coupons?",
+        )
+        assert res["valid"] is False
+        assert res["code"] is None
 
 
 # =============================================================================

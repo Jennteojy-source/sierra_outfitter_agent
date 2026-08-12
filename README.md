@@ -1,64 +1,64 @@
-# Sierra Outfitter Agent
+# Sierra Outfitters Agent
 
-Sierra Outfitters is an AI-powered retail assistant for an outdoor gear brand. It features order lookup, product catalog search with recommendations, and an Early Risers discount promotion.
+Retail chat agent for Sierra Outfitters: catalog recommendations, order status and tracking, and the Early Risers promotion. Built as a hand-written OpenAI tool loop (no agent framework).
 
 ## Prerequisites
 
-Add your OpenAI API key to `.env`:
+- Python 3
+- Node.js (`npm`)
+- An OpenAI API key in `.env` at the repo root:
 
 ```env
 OPENAI_API_KEY=sk-...
 OPENAI_MODEL=gpt-4o
 ```
 
----
+`.env` is gitignored. `./start.sh` creates `.venv` and installs frontend deps on first run.
 
 ## Commands
 
-### 1. Start (Server + UI)
-
-Start both the FastAPI backend (`http://127.0.0.1:8000`) and React frontend (`http://127.0.0.1:5173`):
+### 1. Start (API + UI)
 
 ```bash
 ./start.sh
 ```
 
-### 2. Run Tests (Unit Tests)
+- API: `http://127.0.0.1:8000`
+- UI: `http://127.0.0.1:5173`
 
-Run fast, deterministic unit tests for tools, prompt construction, and API endpoints:
+### 2. Unit tests
+
+Deterministic tests for tools, prompts, and API endpoints (no live OpenAI calls):
 
 ```bash
 .venv/bin/pytest tests/
 ```
 
-### 3. Run Evals (LLM Agent Evaluation)
+### 3. Evals
 
-Run automated evaluation test suite testing end-to-end agent tool usage, argument extraction, and promo guardrails:
+Live LLM evals for tool choice, arguments, promo eligibility, and multi-turn order lookup:
 
 ```bash
 .venv/bin/python -m evals.eval_runner
 ```
 
----
-
 ## Features
 
-- **Catalog Search (`search_catalog`)**: Gear Q&A, tag filtering, stock availability checks, and product recommendations.
-- **Customer Orders (`lookup_order`)**: Order status, item breakdowns, and USPS tracking link generation by order number or email.
-- **Early Risers Discount (`early_riser_promo`)**: Time-bound 10% discount codes valid only between 8:00 AM – 10:00 AM Pacific Time when explicitly requested.
-
----
+- **Catalog (`search_catalog`)**: Recommendations, stock, and tags from `product_catalog.json`. Honest misses — no invented products.
+- **Orders (`lookup_order`)**: Status, items, and a USPS tracking URL. Requires **both** order number and email from `customer_order.json`. Tracking link: `https://tools.usps.com/go/TrackConfirmAction?tLabels={trackingNumber}`.
+- **Early Risers (`early_riser_promo`)**: Unique 10% code. The tool decides eligibility: the customer must ask for Early Risers by name, and the clock must be 8:00–10:00 AM Pacific. Generic coupon asks do not mint a code.
+- **Handoff (`request_human_handoff`)**: Queues a human for refunds, billing, and other out-of-scope issues. The agent can still help with catalog, orders, and Early Risers while they wait.
 
 ## Repository Structure
 
 | Path | Purpose |
 |---|---|
-| `server/` | FastAPI server, OpenAI agent loop, and tools |
+| `server/` | FastAPI app, OpenAI tool loop, prompts, and tools |
 | `frontend/` | React chat UI |
-| `tests/` | Unit test suite for tools, prompts, and endpoints |
-| `evals/` | LLM evaluation suite, dataset, and runner |
-| `customer_profile` | Brand voice & guardrail instructions |
-| `product_catalog.json` | Product inventory dataset |
-| `customer_order.json` | Order tracking dataset |
+| `tests/` | Unit tests |
+| `evals/` | Live LLM eval dataset and runner |
+| `customer_profile` | Brand voice |
+| `product_catalog.json` | Catalog dataset |
+| `customer_order.json` | Order dataset |
 | `assets/` | Product images |
-| `start.sh` | One-command starter script |
+| `start.sh` | One-command starter |

@@ -45,6 +45,25 @@ def test_api_chat_empty_message_fails():
     assert "Send a message or an image" in response.json()["detail"]
 
 
+def test_api_chat_message_too_long():
+    from server.agent import MAX_MESSAGE_CHARS
+
+    response = client.post("/api/chat", data={"message": "a" * (MAX_MESSAGE_CHARS + 1)})
+    assert response.status_code == 400
+    assert "too long" in response.json()["detail"].lower()
+
+
+def test_api_chat_image_too_large(monkeypatch):
+    monkeypatch.setattr("server.main.MAX_IMAGE_BYTES", 32)
+    response = client.post(
+        "/api/chat",
+        data={"message": "what is this"},
+        files={"image": ("huge.png", b"x" * 64, "image/png")},
+    )
+    assert response.status_code == 400
+    assert "too large" in response.json()["detail"].lower()
+
+
 def test_api_chat_success():
     mock_products = [
         {"sku": "SOBP001", "name": "Test Backpack", "in_stock": True}

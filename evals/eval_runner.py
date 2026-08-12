@@ -55,24 +55,88 @@ def extract_tool_calls(history: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return calls
 
 
+def _check_text_assertions(
+    assertions: list,
+    text: str,
+    *,
+    prefix: str = "",
+) -> list[str]:
+    failures: list[str] = []
+    label_prefix = f"{prefix} " if prefix else ""
+    for i, assertion in enumerate(assertions, 1):
+        if isinstance(assertion, str):
+            if assertion.lower() not in text.lower():
+                failures.append(
+                    f"{label_prefix}Response missing expected text substring: '{assertion}'"
+                )
+        elif callable(assertion):
+            label = getattr(assertion, "__name__", f"assertion_{i}")
+            try:
+                if not assertion(text):
+                    failures.append(f"{label_prefix}Text assertion '{label}' returned False.")
+            except Exception as e:
+                failures.append(f"{label_prefix}Text assertion '{label}' error: {e}")
+    return failures
+
+
+def _run_conversation(test_case: EvalTestCase) -> tuple[str, str, list[dict[str, Any]], list[list[str]], dict[str, Any]]:
+    """Run all user turns. Returns (first_text, final_text, all_calls, per_turn_names, flags)."""
+    prompts = [test_case.user_prompt, *test_case.follow_ups]
+    history: list[dict[str, Any]] = []
+    all_calls: list[dict[str, Any]] = []
+    turn_names: list[list[str]] = []
+    first_text = ""
+    assistant_text = ""
+    flags: dict[str, Any] = {}
+
+    for prompt in prompts:
+        before = len(history)
+        assistant_text, history, _products, flags = run_agent(
+            history,
+            {"role": "user", "content": prompt},
+        )
+        if not first_text:
+            first_text = assistant_text
+        turn_calls = extract_tool_calls(history[before:])
+        all_calls.extend(turn_calls)
+        turn_names.append([tc["name"] for tc in turn_calls])
+
+    return first_text, assistant_text, all_calls, turn_names, flags
+
+
 def run_single_test(test_case: EvalTestCase) -> dict[str, Any]:
-    """Runs a single test case and returns evaluation results."""
-    user_msg = {"role": "user", "content": test_case.user_prompt}
+    """Runs a single test case (one or more turns) and returns evaluation results."""
 
     def _invoke():
-        return run_agent(history=[], user_message=user_msg)
+        return _run_conversation(test_case)
 
     if test_case.time_mock_pt:
         mock_dt = make_datetime_mock(test_case.time_mock_pt)
         with patch("server.tools.datetime", mock_dt), patch("server.prompts.datetime", mock_dt):
-            assistant_text, history, products, flags = _invoke()
+            first_text, assistant_text, tool_calls, turn_names, flags = _invoke()
     else:
-        assistant_text, history, products, flags = _invoke()
+        first_text, assistant_text, tool_calls, turn_names, flags = _invoke()
 
-    tool_calls = extract_tool_calls(history)
     executed_tool_names = [tc["name"] for tc in tool_calls]
-
     failures: list[str] = []
+
+    if test_case.follow_ups and test_case.first_turn_assertions:
+        failures.extend(
+            _check_text_assertions(
+                test_case.first_turn_assertions,
+                first_text,
+                prefix="Turn 1",
+            )
+        )
+
+    if test_case.forbidden_until_last:
+        for turn_i, names in enumerate(turn_names[:-1], 1):
+            for tool in test_case.forbidden_until_last:
+                if tool in names:
+                    failures.append(
+                        f"Turn {turn_i}: '{tool}' was called before the last user message. "
+                        f"Tools that turn: {names}"
+                    )
 
     for exp_tool in test_case.expected_tools:
         if exp_tool not in executed_tool_names:
@@ -95,17 +159,7 @@ def run_single_test(test_case: EvalTestCase) -> dict[str, Any]:
                     f"Tool '{tool_name}' argument check failed for args: {matching_args}"
                 )
 
-    for i, assertion in enumerate(test_case.text_assertions, 1):
-        if isinstance(assertion, str):
-            if assertion.lower() not in assistant_text.lower():
-                failures.append(f"Response missing expected text substring: '{assertion}'")
-        elif callable(assertion):
-            label = getattr(assertion, "__name__", f"assertion_{i}")
-            try:
-                if not assertion(assistant_text):
-                    failures.append(f"Text assertion '{label}' returned False.")
-            except Exception as e:
-                failures.append(f"Text assertion '{label}' error: {e}")
+    failures.extend(_check_text_assertions(test_case.text_assertions, assistant_text))
 
     handed_off = bool(flags.get("handed_off"))
     if test_case.expect_handed_off is True and not handed_off:
@@ -120,8 +174,11 @@ def run_single_test(test_case: EvalTestCase) -> dict[str, Any]:
         "description": test_case.description,
         "passed": passed,
         "user_prompt": test_case.user_prompt,
+        "follow_ups": list(test_case.follow_ups),
         "assistant_text": assistant_text,
+        "first_turn_text": first_text,
         "executed_tools": executed_tool_names,
+        "turn_tools": turn_names,
         "tool_calls": tool_calls,
         "handed_off": handed_off,
         "failures": failures,
@@ -149,6 +206,8 @@ def run_evals(category_filter: str | None = None, test_id_filter: str | None = N
     for idx, test_case in enumerate(filtered_cases, 1):
         print(f"[{idx}/{len(filtered_cases)}] Running: {test_case.id} ({test_case.category.upper()})")
         print(f"    Prompt: \"{test_case.user_prompt}\"")
+        for follow_i, follow in enumerate(test_case.follow_ups, 2):
+            print(f"    Turn {follow_i}: \"{follow}\"")
 
         res = run_single_test(test_case)
         results.append(res)

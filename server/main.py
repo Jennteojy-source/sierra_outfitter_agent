@@ -15,7 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
-from server.agent import run_agent, run_nudge
+from server.agent import MAX_MESSAGE_CHARS, run_agent, run_nudge
 from server.ratings import save_rating
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -39,6 +39,7 @@ session_meta: dict[str, dict[str, Any]] = {}
 
 ASSETS_DIR = ROOT / "assets"
 MAX_IMAGE_BYTES = 8 * 1024 * 1024
+_READ_CHUNK = 64 * 1024
 
 
 def _idle_seconds() -> int:
@@ -127,6 +128,31 @@ def _has_exchange(sid: str) -> bool:
     return has_user and has_asst
 
 
+def _friendly_error(exc: Exception) -> str:
+    msg = str(exc).lower()
+    if "context_length" in msg or "maximum context" in msg or "too many tokens" in msg:
+        return "That note is a bit too long for the trail map. Try a shorter message?"
+    if "rate limit" in msg or "429" in msg:
+        return "Trail's busy right now — wait a moment and send that again."
+    if "timeout" in msg or "timed out" in msg:
+        return "Lost the signal in the trees. Please try again."
+    if "api_key" in msg or "openai_api_key" in msg:
+        return "OPENAI_API_KEY is not set. Please check your .env file."
+    return "Trail's a bit foggy on my end. Please try again."
+
+
+async def _read_image_limited(image: UploadFile) -> bytes:
+    buf = bytearray()
+    while True:
+        chunk = await image.read(_READ_CHUNK)
+        if not chunk:
+            break
+        if len(buf) + len(chunk) > MAX_IMAGE_BYTES:
+            raise HTTPException(status_code=400, detail="Image too large (max 8MB)")
+        buf.extend(chunk)
+    return bytes(buf)
+
+
 def _build_user_content(text: str, image_b64: str | None, image_mime: str | None) -> Any:
     text = (text or "").strip()
     if not image_b64:
@@ -210,7 +236,7 @@ def nudge(x_session_id: str | None = Header(default=None)) -> NudgeResponse:
     try:
         text, updated, debug = run_nudge(sessions[sid])
     except Exception as exc:  # noqa: BLE001
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        raise HTTPException(status_code=500, detail=_friendly_error(exc)) from exc
 
     sessions[sid] = updated
     meta["nudged"] = True
@@ -270,9 +296,7 @@ async def chat(
     image_mime = None
     image_preview = None
     if image is not None and image.filename:
-        data = await image.read()
-        if len(data) > MAX_IMAGE_BYTES:
-            raise HTTPException(status_code=400, detail="Image too large (max 8MB)")
+        data = await _read_image_limited(image)
         image_mime = image.content_type or mimetypes.guess_type(image.filename)[0] or "image/png"
         if not image_mime.startswith("image/"):
             raise HTTPException(status_code=400, detail="Only image uploads are supported")
@@ -281,6 +305,11 @@ async def chat(
 
     if not message.strip() and not image_b64:
         raise HTTPException(status_code=400, detail="Send a message or an image")
+    if len(message) > MAX_MESSAGE_CHARS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Message too long (max {MAX_MESSAGE_CHARS} characters)",
+        )
 
     ui_sessions[sid].append(
         {
@@ -302,7 +331,7 @@ async def chat(
         )
     except Exception as exc:  # noqa: BLE001 — surface cleanly to UI
         ui_sessions[sid].pop()
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        raise HTTPException(status_code=500, detail=_friendly_error(exc)) from exc
 
     sessions[sid] = updated
     handed_off = bool(meta.get("handed_off")) or bool(flags.get("handed_off"))
