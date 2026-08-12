@@ -17,3 +17,10 @@ def test_build_system_prompt_contains_brand_and_skills():
     assert "Skill 3 — Early Risers Discount" in prompt
     assert "early_riser_promo" in prompt
     assert "America/Los_Angeles" in prompt
+
+
+def test_order_lookup_allows_either_identifier():
+    prompt = build_system_prompt()
+    assert "either" in prompt.lower()
+    assert "do NOT ask for email first" in prompt
+    assert "do NOT ask for an order number first" in prompt

@@ -245,6 +245,22 @@
   word-break: break-word;
 }
 
+.msg-link {
+  color: var(--pine);
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  word-break: break-all;
+}
+
+.msg-link:hover {
+  color: #0f2e24;
+}
+
+.bubble.user .msg-link {
+  color: #d7f0e0;
+}
+
 .msg-image {
   display: block;
   max-width: 220px;

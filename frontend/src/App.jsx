@@ -44,6 +44,57 @@ function SendIcon() {
   )
 }
 
+/** Render markdown links + bare URLs as clickable anchors; keep the rest as text. */
+function MessageText({ text }) {
+  if (!text) return null
+
+  const pattern =
+    /\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)|(https?:\/\/[^\s<>()]+)/g
+  const nodes = []
+  let last = 0
+  let match
+  let key = 0
+
+  while ((match = pattern.exec(text)) !== null) {
+    if (match.index > last) {
+      nodes.push(text.slice(last, match.index))
+    }
+    if (match[1] && match[2]) {
+      nodes.push(
+        <a
+          key={key++}
+          className="msg-link"
+          href={match[2]}
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          {match[1]}
+        </a>,
+      )
+    } else if (match[3]) {
+      const href = match[3].replace(/[.,;:!?]+$/, '')
+      const trailing = match[3].slice(href.length)
+      nodes.push(
+        <a
+          key={key++}
+          className="msg-link"
+          href={href}
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          {href}
+        </a>,
+      )
+      if (trailing) nodes.push(trailing)
+    }
+    last = match.index + match[0].length
+  }
+
+  if (last < text.length) nodes.push(text.slice(last))
+
+  return <p className="msg-text">{nodes}</p>
+}
+
 function ProductCarousel({ products }) {
   const trackRef = useRef(null)
   const [canScrollLeft, setCanScrollLeft] = useState(false)
@@ -297,7 +348,7 @@ export default function App() {
                   {msg.image && (
                     <img className="msg-image" src={msg.image} alt="Uploaded" />
                   )}
-                  {msg.content && <p className="msg-text">{msg.content}</p>}
+                  {msg.content && <MessageText text={msg.content} />}
                 </div>
               </div>
               {msg.products?.length > 0 && (

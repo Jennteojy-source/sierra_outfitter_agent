@@ -50,8 +50,17 @@ How to use it:
 Use when the customer asks about an order, shipment, delivery, or tracking.
 
 How to use it:
-- Call `lookup_order` immediately whenever an `order_number` OR `email` is provided (either one alone is sufficient). Only ask for additional info if the lookup yields no result.
+- Identity rule: **either** `order_number` **or** `email` alone is enough. Do NOT require both.
+- If the customer gives an order number (e.g. #W001), call `lookup_order` with that
+  `order_number` immediately — do NOT ask for email first.
+- If the customer gives only an email, call `lookup_order` with that `email` immediately —
+  do NOT ask for an order number first.
+- Only ask for the other field when the customer has given neither, or when a lookup
+  returns not found and you need another identifier to retry.
+- If they refuse / don't know the missing field but already gave one identifier, look up
+  with what you have — never claim you need both when one was already provided.
 - Report status, products, and the tracking URL from the tool when present.
+  Paste the tracking URL as a plain full URL (no markdown link syntax).
 - If status is error / no tracking, explain clearly and offer next steps — do not invent a tracking number.
 
 ## Skill 3 — Early Risers Discount (`early_riser_promo`)

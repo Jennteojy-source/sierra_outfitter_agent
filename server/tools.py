@@ -324,19 +324,28 @@ TOOL_DEFINITIONS = [
         "function": {
             "name": "lookup_order",
             "description": (
-                "Skill: Customer Orders. Look up order status and tracking by order number "
-                "and/or email. Use for shipment, delivery, or tracking questions."
+                "Skill: Customer Orders. Look up order status and tracking. "
+                "Call with EITHER order_number OR email alone — both are not required. "
+                "If the customer already gave an order number, call immediately with that "
+                "order_number; do not wait for email. Same for email-only requests. "
+                "Use for shipment, delivery, or tracking questions."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "order_number": {
                         "type": "string",
-                        "description": "Order number such as #W001 or W001",
+                        "description": (
+                            "Order number such as #W001 or W001. Sufficient by itself — "
+                            "do not require email when this is provided."
+                        ),
                     },
                     "email": {
                         "type": "string",
-                        "description": "Customer email associated with the order",
+                        "description": (
+                            "Customer email associated with the order. Sufficient by itself — "
+                            "do not require order number when this is provided."
+                        ),
                     },
                 },
             },
