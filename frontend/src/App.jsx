@@ -95,6 +95,105 @@ function MessageText({ text }) {
   return <p className="msg-text">{nodes}</p>
 }
 
+function RatingChip({ sessionId, alreadyRated }) {
+  const [choice, setChoice] = useState(null)
+  const [comment, setComment] = useState('')
+  const [done, setDone] = useState(alreadyRated ? 'thanks' : null)
+  const [busy, setBusy] = useState(false)
+
+  async function finish(rating, extraComment) {
+    if (busy) return
+    setBusy(true)
+    try {
+      await fetch(`${API}/api/rating`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Session-Id': sessionId,
+        },
+        body: JSON.stringify({
+          rating,
+          comment: extraComment || undefined,
+        }),
+      })
+      setDone(rating === 'skip' ? 'skipped' : 'thanks')
+    } catch {
+      setDone(rating === 'skip' ? 'skipped' : 'thanks')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  if (done === 'thanks') {
+    return (
+      <p className="rating-thanks">Thanks — that helps us train the trail guide.</p>
+    )
+  }
+  if (done === 'skipped') return null
+
+  if (!choice) {
+    return (
+      <div className="rating-chip">
+        <p className="rating-label">How was this trail?</p>
+        <div className="rating-actions">
+          <button
+            type="button"
+            className="rating-thumb"
+            onClick={() => setChoice('up')}
+            aria-label="Thumbs up"
+            disabled={busy}
+          >
+            👍
+          </button>
+          <button
+            type="button"
+            className="rating-thumb"
+            onClick={() => setChoice('down')}
+            aria-label="Thumbs down"
+            disabled={busy}
+          >
+            👎
+          </button>
+          <button
+            type="button"
+            className="rating-skip"
+            onClick={() => finish('skip')}
+            disabled={busy}
+          >
+            Skip
+          </button>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="rating-chip">
+      <p className="rating-label">
+        {choice === 'up' ? 'Glad it helped.' : 'Sorry it was rocky.'} Optional note:
+      </p>
+      <div className="rating-followup">
+        <input
+          type="text"
+          maxLength={500}
+          value={comment}
+          onChange={(e) => setComment(e.target.value)}
+          placeholder="Anything we should know?"
+          disabled={busy}
+        />
+        <button
+          type="button"
+          className="rating-send"
+          onClick={() => finish(choice, comment)}
+          disabled={busy}
+        >
+          Send
+        </button>
+      </div>
+    </div>
+  )
+}
+
 function ProductCarousel({ products }) {
   const trackRef = useRef(null)
   const [canScrollLeft, setCanScrollLeft] = useState(false)
@@ -154,23 +253,88 @@ export default function App() {
   const [preview, setPreview] = useState(null)
   const [waiting, setWaiting] = useState(false)
   const [error, setError] = useState('')
+  const [handedOff, setHandedOff] = useState(false)
+  const [rated, setRated] = useState(false)
+  const [idleSeconds, setIdleSeconds] = useState(300)
   const bottomRef = useRef(null)
   const fileRef = useRef(null)
+  const nudgeTimerRef = useRef(null)
+  const handedOffRef = useRef(false)
+  const nudgedRef = useRef(false)
+  const waitingRef = useRef(false)
+  const sessionRef = useRef(sessionId)
+
+  useEffect(() => {
+    handedOffRef.current = handedOff
+  }, [handedOff])
+  useEffect(() => {
+    waitingRef.current = waiting
+  }, [waiting])
+  useEffect(() => {
+    sessionRef.current = sessionId
+  }, [sessionId])
+
+  function clearNudgeTimer() {
+    if (nudgeTimerRef.current) {
+      clearTimeout(nudgeTimerRef.current)
+      nudgeTimerRef.current = null
+    }
+  }
+
+  async function requestNudge() {
+    if (handedOffRef.current || waitingRef.current || nudgedRef.current) return
+    try {
+      const res = await fetch(`${API}/api/nudge`, {
+        method: 'POST',
+        headers: { 'X-Session-Id': sessionRef.current },
+      })
+      const data = await res.json()
+      if (data.skipped) return
+      nudgedRef.current = true
+      if (data.message && !data.already_sent) {
+        setMessages((m) => {
+          if (m.some((msg) => msg.kind === 'nudge')) return m
+          return [
+            ...m,
+            { role: 'assistant', content: data.message, kind: 'nudge' },
+          ]
+        })
+      }
+    } catch {
+      /* idle nudge is best-effort */
+    }
+  }
+
+  function scheduleNudge() {
+    clearNudgeTimer()
+    if (handedOffRef.current || nudgedRef.current || waitingRef.current) return
+    nudgeTimerRef.current = setTimeout(requestNudge, idleSeconds * 1000)
+  }
 
   useEffect(() => {
     let cancelled = false
     async function load() {
       try {
-        const res = await fetch(`${API}/api/history`, {
-          headers: { 'X-Session-Id': sessionId },
-        })
-        const data = await res.json()
+        const [histRes, cfgRes] = await Promise.all([
+          fetch(`${API}/api/history`, {
+            headers: { 'X-Session-Id': sessionId },
+          }),
+          fetch(`${API}/api/config`),
+        ])
+        const data = await histRes.json()
+        const cfg = await cfgRes.json()
         if (cancelled) return
+        if (typeof cfg.nudge_idle_seconds === 'number') {
+          setIdleSeconds(cfg.nudge_idle_seconds)
+        }
         if (data.session_id && data.session_id !== sessionId) {
           setSessionId(data.session_id)
           setSid(data.session_id)
         }
         setMessages(data.messages || [])
+        setHandedOff(Boolean(data.handed_off))
+        setRated(Boolean(data.rated))
+        nudgedRef.current = Boolean(data.nudged)
       } catch {
         if (!cancelled) setError('Could not reach the trail basecamp (API). Is the server running?')
       }
@@ -184,6 +348,23 @@ export default function App() {
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages, waiting])
+
+  useEffect(() => {
+    const hasUser = messages.some((m) => m.role === 'user')
+    const hasAsst = messages.some((m) => m.role === 'assistant')
+    if (messages.some((m) => m.kind === 'nudge')) {
+      nudgedRef.current = true
+      clearNudgeTimer()
+      return undefined
+    }
+    if (hasUser && hasAsst && !handedOff && !waiting) {
+      scheduleNudge()
+    } else {
+      clearNudgeTimer()
+    }
+    return clearNudgeTimer
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [messages, handedOff, waiting, idleSeconds])
 
   function onPickImage(e) {
     const file = e.target.files?.[0]
@@ -211,14 +392,26 @@ export default function App() {
   async function resetChat() {
     setWaiting(true)
     setError('')
+    clearNudgeTimer()
+    setHandedOff(false)
+    handedOffRef.current = false
+    nudgedRef.current = false
+    setRated(false)
+    setMessages([])
+    setInput('')
     try {
       const res = await fetch(`${API}/api/reset`, {
         method: 'POST',
         headers: { 'X-Session-Id': sessionId },
       })
       const data = await res.json()
-      setSessionId(data.session_id)
-      setSid(data.session_id)
+      const nextId = data.session_id || crypto.randomUUID()
+      setSessionId(nextId)
+      setSid(nextId)
+      setHandedOff(false)
+      handedOffRef.current = false
+      nudgedRef.current = false
+      setRated(false)
       setMessages([])
       clearImage()
       setInput('')
@@ -235,6 +428,7 @@ export default function App() {
 
     setWaiting(true)
     setError('')
+    clearNudgeTimer()
     const optimistic = {
       role: 'user',
       content: text,
@@ -261,12 +455,20 @@ export default function App() {
         setSid(data.session_id)
       }
 
+      if (data.handed_off) {
+        setHandedOff(true)
+        handedOffRef.current = true
+        nudgedRef.current = true
+        clearNudgeTimer()
+      }
+
       setMessages((m) => [
         ...m,
         {
           role: 'assistant',
           content: data.message,
           products: data.products || null,
+          kind: data.kind || null,
         },
       ])
       clearImage()
@@ -312,6 +514,13 @@ export default function App() {
           </button>
         </header>
 
+        {handedOff && (
+          <div className="handoff-banner" role="status">
+            <span className="handoff-dot" aria-hidden="true" />
+            Waiting for a human trail guide · AI is paused
+          </div>
+        )}
+
         <main className="chat">
           {messages.length === 0 && !waiting && (
             <div className="welcome">
@@ -344,13 +553,26 @@ export default function App() {
           {messages.map((msg, i) => (
             <div key={i} className={`message-block ${msg.role}`}>
               <div className={`bubble-row ${msg.role}`}>
-                <div className={`bubble ${msg.role}`}>
+                <div
+                  className={`bubble ${msg.role} ${msg.kind === 'nudge' ? 'nudge' : ''} ${
+                    msg.kind === 'handoff' || msg.kind === 'handoff_ack' ? 'handoff' : ''
+                  }`}
+                >
+                  {msg.kind === 'nudge' && (
+                    <p className="bubble-kicker">Check-in</p>
+                  )}
+                  {(msg.kind === 'handoff' || msg.kind === 'handoff_ack') && (
+                    <p className="bubble-kicker">Human handoff</p>
+                  )}
                   {msg.image && (
                     <img className="msg-image" src={msg.image} alt="Uploaded" />
                   )}
                   {msg.content && <MessageText text={msg.content} />}
                 </div>
               </div>
+              {msg.kind === 'nudge' && (
+                <RatingChip sessionId={sessionId} alreadyRated={rated} />
+              )}
               {msg.products?.length > 0 && (
                 <ProductCarousel products={msg.products} />
               )}
@@ -359,7 +581,9 @@ export default function App() {
 
           {waiting && (
             <div className="bubble-row assistant">
-              <div className="bubble assistant waiting">Scouting the trail…</div>
+              <div className="bubble assistant waiting">
+                {handedOff ? 'Passing that along…' : 'Scouting the trail…'}
+              </div>
             </div>
           )}
           <div ref={bottomRef} />
@@ -396,20 +620,27 @@ export default function App() {
             <div className="composer-row">
               <button
                 type="button"
-                className={`icon-btn attach-btn ${waiting ? 'disabled' : ''}`}
+                className={`icon-btn attach-btn ${waiting || handedOff ? 'disabled' : ''}`}
                 title="Attach image"
                 aria-label="Attach image"
                 onClick={openFilePicker}
-                disabled={waiting}
+                disabled={waiting || handedOff}
               >
                 <AttachIcon />
               </button>
               <textarea
                 rows={1}
                 value={input}
-                onChange={(e) => setInput(e.target.value)}
+                onChange={(e) => {
+                  setInput(e.target.value)
+                  if (!handedOff && !waiting) scheduleNudge()
+                }}
                 onKeyDown={onKeyDown}
-                placeholder="Message your trail guide…"
+                placeholder={
+                  handedOff
+                    ? 'Leave a note for the team…'
+                    : 'Message your trail guide…'
+                }
                 disabled={waiting}
               />
               <button

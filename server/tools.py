@@ -10,57 +10,17 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from server.catalog_index import CatalogIndex
+
 ROOT = Path(__file__).resolve().parent.parent
 ORDERS_PATH = ROOT / "customer_order.json"
 CATALOG_PATH = ROOT / "product_catalog.json"
 PT = ZoneInfo("America/Los_Angeles")
 TRACKING_URL = "https://tools.usps.com/go/TrackConfirmAction?tLabels={trackingNumber}"
 
-STOPWORDS = {
-    "a",
-    "an",
-    "the",
-    "and",
-    "or",
-    "for",
-    "to",
-    "of",
-    "in",
-    "on",
-    "with",
-    "my",
-    "me",
-    "i",
-    "im",
-    "looking",
-    "want",
-    "need",
-    "show",
-    "find",
-    "get",
-    "please",
-    "some",
-    "any",
-    "recommend",
-    "recommendation",
-    "recommendations",
-    "product",
-    "products",
-    "gear",
-    "item",
-    "items",
-    "something",
-    "about",
-    "do",
-    "you",
-    "have",
-    "sell",
-    "best",
-    "good",
-}
-
 _orders: list[dict[str, Any]] | None = None
 _catalog: list[dict[str, Any]] | None = None
+_catalog_index: CatalogIndex | None = None
 
 
 def _load_orders() -> list[dict[str, Any]]:
@@ -77,41 +37,15 @@ def _load_catalog() -> list[dict[str, Any]]:
     return _catalog
 
 
+def _get_catalog_index() -> CatalogIndex:
+    global _catalog_index
+    if _catalog_index is None:
+        _catalog_index = CatalogIndex(_load_catalog())
+    return _catalog_index
+
+
 def _normalize(value: str) -> str:
     return re.sub(r"[^a-z0-9]", "", value.lower())
-
-
-def _tokenize(text: str) -> list[str]:
-    return [
-        t
-        for t in re.split(r"[^a-z0-9]+", text.lower())
-        if t and t not in STOPWORDS and len(t) > 1
-    ]
-
-
-def _product_card(
-    product: dict[str, Any],
-    *,
-    score: float = 0,
-    matched_on: list[str] | None = None,
-) -> dict[str, Any]:
-    image = product.get("Image", "")
-    if image.startswith("assets/"):
-        image_url = "/" + image
-    else:
-        image_url = f"/assets/{image}"
-    inventory = int(product.get("Inventory", 0) or 0)
-    return {
-        "sku": product["SKU"],
-        "name": product["ProductName"],
-        "image": image_url,
-        "description": product.get("Description", ""),
-        "tags": product.get("Tags", []),
-        "inventory": inventory,
-        "in_stock": inventory > 0,
-        "match_score": round(score, 2),
-        "matched_on": matched_on or [],
-    }
 
 
 def lookup_order(order_number: str | None = None, email: str | None = None) -> dict[str, Any]:
@@ -168,123 +102,16 @@ def search_catalog(
     limit: int = 4,
     in_stock_only: bool = False,
     tags: list[str] | None = None,
+    exclude_skus: list[str] | None = None,
 ) -> dict[str, Any]:
-    """Local search engine over name, tags, description, SKU, and stock."""
-    catalog = _load_catalog()
-    query = (query or "").strip()
-    query_lower = query.lower()
-    tokens = _tokenize(query)
-    requested_tags = [t.strip().lower() for t in (tags or []) if t and t.strip()]
-    limit = max(1, min(int(limit or 4), 6))
-
-    scored: list[tuple[float, dict[str, Any], list[str]]] = []
-
-    for product in catalog:
-        inventory = int(product.get("Inventory", 0) or 0)
-        in_stock = inventory > 0
-        if in_stock_only and not in_stock:
-            continue
-
-        name = product.get("ProductName", "")
-        description = product.get("Description", "")
-        sku = product.get("SKU", "")
-        product_tags = product.get("Tags", []) or []
-        name_l = name.lower()
-        desc_l = description.lower()
-        sku_l = sku.lower()
-        tags_l = [t.lower() for t in product_tags]
-
-        score = 0.0
-        matched_on: list[str] = []
-
-        # Full-query phrase hits
-        if query_lower and query_lower in name_l:
-            score += 50
-            matched_on.append("name_phrase")
-        if query_lower and any(query_lower == t or query_lower in t for t in tags_l):
-            score += 28
-            matched_on.append("tag_phrase")
-        if query_lower and query_lower in desc_l:
-            score += 12
-            matched_on.append("description_phrase")
-
-        # Field-weighted token search
-        for token in tokens:
-            if token == sku_l or token in sku_l:
-                score += 25
-                matched_on.append(f"sku:{sku}")
-            if token in name_l:
-                # stronger if token is a whole word-ish boundary in name
-                score += 14 if re.search(rf"\b{re.escape(token)}\b", name_l) else 9
-                matched_on.append("name")
-            for tag in tags_l:
-                if token == tag:
-                    score += 22
-                    matched_on.append(f"tag:{tag}")
-                elif token in tag or tag in token:
-                    score += 12
-                    matched_on.append(f"tag:{tag}")
-            if token in desc_l:
-                score += 4
-                matched_on.append("description")
-
-        # Explicit tag filters from the agent
-        for req in requested_tags:
-            for tag in tags_l:
-                if req == tag or req in tag or tag in req:
-                    score += 18
-                    matched_on.append(f"filter_tag:{tag}")
-
-        # Stock ranking (search-engine style boost/penalty)
-        if in_stock:
-            score += 8
-            if inventory >= 50:
-                score += 2
-            matched_on.append("in_stock")
-        else:
-            score -= 12
-            matched_on.append("out_of_stock")
-
-        # Deduplicate matched_on while preserving order
-        seen: set[str] = set()
-        clean_matched: list[str] = []
-        for m in matched_on:
-            if m not in seen:
-                seen.add(m)
-                clean_matched.append(m)
-
-        # Keep docs with any real relevance, or tag-filter-only hits
-        relevance = score - (8 if in_stock else 0) - (2 if inventory >= 50 else 0)
-        if relevance > 0 or (requested_tags and any(m.startswith("filter_tag:") for m in clean_matched)):
-            scored.append((score, product, clean_matched))
-
-    scored.sort(key=lambda x: (-x[0], -int(x[1].get("Inventory", 0) or 0), x[1].get("ProductName", "")))
-
-    # Soft fallback: if no lexical hits, return top in-stock adventure picks
-    used_fallback = False
-    if not scored and (tokens or requested_tags or query):
-        used_fallback = True
-        fallback = [
-            p for p in catalog if (not in_stock_only) or int(p.get("Inventory", 0) or 0) > 0
-        ]
-        fallback.sort(key=lambda p: -int(p.get("Inventory", 0) or 0))
-        scored = [(0.0, p, ["fallback_popular"]) for p in fallback[:limit]]
-    else:
-        scored = scored[:limit]
-
-    products = [
-        _product_card(product, score=score, matched_on=matched)
-        for score, product, matched in scored
-    ]
-
-    return {
-        "query": query,
-        "in_stock_only": in_stock_only,
-        "tags_filter": requested_tags,
-        "count": len(products),
-        "fallback": used_fallback,
-        "products": products,
-    }
+    """Local inverted-index search over name, tags, description, SKU, and stock."""
+    return _get_catalog_index().search(
+        query,
+        limit=limit,
+        in_stock_only=in_stock_only,
+        tags=tags,
+        exclude_skus=exclude_skus,
+    )
 
 
 # Back-compat alias
@@ -315,6 +142,22 @@ def early_riser_promo() -> dict[str, Any]:
         "current_time": now.isoformat(),
         "window": "08:00–10:00 America/Los_Angeles",
         "reason": "Customer is within the Early Risers window; unique code generated.",
+    }
+
+
+def request_human_handoff(reason: str, summary: str | None = None) -> dict[str, Any]:
+    allowed = {"explicit_request", "out_of_scope", "unresolved_after_retries"}
+    clean_reason = reason if reason in allowed else "explicit_request"
+    return {
+        "handed_off": True,
+        "reason": clean_reason,
+        "summary": (summary or "").strip() or None,
+        "queue": "human_trail_guides",
+        "ai_muted": True,
+        "message": (
+            "Handoff recorded. Confirm briefly that a human will take over, then stop. "
+            "Do not keep answering as the AI."
+        ),
     }
 
 
@@ -356,9 +199,11 @@ TOOL_DEFINITIONS = [
         "function": {
             "name": "search_catalog",
             "description": (
-                "Skill: Catalog Search. Local product search engine over product name, tags, "
+                "Skill: Catalog Search. Local inverted-index search over product name, tags, "
                 "description, SKU, and stock. Use for recommendations, 'do you sell X?', "
-                "tag browsing, and in-stock questions. Prefer this over inventing products."
+                "tag browsing, and in-stock questions. Prefer this over inventing products. "
+                "If found=false, say we don't carry that item — do not invent alternatives "
+                "as if they matched the query."
             ),
             "parameters": {
                 "type": "object",
@@ -367,7 +212,7 @@ TOOL_DEFINITIONS = [
                         "type": "string",
                         "description": (
                             "Search query — product name fragments, activity, category keywords "
-                            "(e.g. 'hiking backpack', 'skis', 'invisibility cloak')"
+                            "(e.g. 'hiking backpack', 'skis', 'jackets')"
                         ),
                     },
                     "limit": {
@@ -387,6 +232,14 @@ TOOL_DEFINITIONS = [
                         "description": (
                             "Optional tag filters to boost (e.g. Hiking, Snow, Adventure, "
                             "Food & Beverage)."
+                        ),
+                    },
+                    "exclude_skus": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": (
+                            "SKUs to skip — use when the customer says 'show me more', "
+                            "'any other', or 'something else' so you don't re-show the same item."
                         ),
                     },
                 },
@@ -409,6 +262,37 @@ TOOL_DEFINITIONS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "request_human_handoff",
+            "description": (
+                "Escalate to a human trail guide and mute this AI. "
+                "Try Skills 1–3 first. Call only for an explicit human request you cannot "
+                "fulfill, out-of-scope issues (returns, billing, claims), or after a real "
+                "failed attempt where the customer is still stuck."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "reason": {
+                        "type": "string",
+                        "enum": [
+                            "explicit_request",
+                            "out_of_scope",
+                            "unresolved_after_retries",
+                        ],
+                        "description": "Why a human is needed.",
+                    },
+                    "summary": {
+                        "type": "string",
+                        "description": "One-sentence brief for the human teammate.",
+                    },
+                },
+                "required": ["reason"],
+            },
+        },
+    },
 ]
 
 
@@ -425,16 +309,28 @@ def run_tool(name: str, arguments: dict[str, Any]) -> tuple[dict[str, Any], list
         tags = arguments.get("tags")
         if isinstance(tags, str):
             tags = [tags]
+        exclude = arguments.get("exclude_skus")
+        if isinstance(exclude, str):
+            exclude = [exclude]
         result = search_catalog(
             query=arguments.get("query", ""),
             limit=int(arguments.get("limit") or 4),
             in_stock_only=bool(arguments.get("in_stock_only") or False),
             tags=tags,
+            exclude_skus=exclude,
         )
-        return result, result.get("products")
+        products = result.get("products") or None
+        return result, products if products else None
 
     if name == "early_riser_promo":
         result = early_riser_promo()
+        return result, None
+
+    if name == "request_human_handoff":
+        result = request_human_handoff(
+            reason=str(arguments.get("reason") or "explicit_request"),
+            summary=arguments.get("summary"),
+        )
         return result, None
 
     return {"error": f"Unknown tool: {name}"}, None

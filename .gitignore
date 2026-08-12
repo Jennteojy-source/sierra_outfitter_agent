@@ -7,4 +7,4 @@ node_modules/
 frontend/dist/
 .DS_Store
 *.egg-info/
-.pytest_cache/
+data/ratings.json

@@ -10,7 +10,7 @@ from typing import Any
 from dotenv import load_dotenv
 from openai import OpenAI
 
-from server.prompts import build_system_prompt
+from server.prompts import build_nudge_prompt, build_system_prompt
 from server.tools import TOOL_DEFINITIONS, run_tool
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -19,6 +19,14 @@ load_dotenv(ROOT / ".env")
 MAX_HISTORY_MESSAGES = 25
 MAX_TOOL_ITERS = 5
 MODEL = os.getenv("OPENAI_MODEL", "gpt-4o")
+
+DEFAULT_HANDOFF = (
+    "I've reached the edge of what I can do from basecamp. "
+    "A human trail guide will pick this up shortly — hang tight. 🏔️"
+)
+DEFAULT_NUDGE = (
+    "Still with me on the trail? Happy to keep helping whenever you're ready. 🏔️"
+)
 
 
 def _client() -> OpenAI:
@@ -34,12 +42,9 @@ def _trim_history(history: list[dict[str, Any]]) -> list[dict[str, Any]]:
         return list(history)
 
     trimmed = history[-MAX_HISTORY_MESSAGES:]
-    # Drop leading tool messages that lack their preceding assistant tool_calls
     while trimmed and trimmed[0].get("role") == "tool":
         trimmed = trimmed[1:]
-    # If we start mid tool-call assistant, skip until a clean user/assistant boundary
     while trimmed and trimmed[0].get("role") == "assistant" and trimmed[0].get("tool_calls"):
-        # drop assistant + following tools
         trimmed = trimmed[1:]
         while trimmed and trimmed[0].get("role") == "tool":
             trimmed = trimmed[1:]
@@ -49,10 +54,10 @@ def _trim_history(history: list[dict[str, Any]]) -> list[dict[str, Any]]:
 def run_agent(
     history: list[dict[str, Any]],
     user_message: dict[str, Any],
-) -> tuple[str, list[dict[str, Any]], list[dict[str, Any]] | None]:
+) -> tuple[str, list[dict[str, Any]], list[dict[str, Any]] | None, dict[str, Any]]:
     """
     Append user_message, run tool loop, update history.
-    Returns (assistant_text, updated_history, products_for_ui).
+    Returns (assistant_text, updated_history, products_for_ui, flags).
     """
     client = _client()
     working = list(history)
@@ -60,6 +65,8 @@ def run_agent(
 
     products_for_ui: list[dict[str, Any]] | None = None
     assistant_text = ""
+    handed_off = False
+    handoff_reason: str | None = None
 
     for _ in range(MAX_TOOL_ITERS):
         messages = [{"role": "system", "content": build_system_prompt()}]
@@ -103,6 +110,14 @@ def run_agent(
             result, products = run_tool(tc.function.name, args)
             if products:
                 products_for_ui = products
+            if tc.function.name == "request_human_handoff" or (
+                isinstance(result, dict) and result.get("handed_off")
+            ):
+                handed_off = True
+                handoff_reason = (
+                    (args.get("reason") if isinstance(args, dict) else None)
+                    or (result.get("reason") if isinstance(result, dict) else None)
+                )
             working.append(
                 {
                     "role": "tool",
@@ -110,8 +125,13 @@ def run_agent(
                     "content": json.dumps(result),
                 }
             )
+
+        if handed_off:
+            assistant_text = (choice.content or "").strip() or DEFAULT_HANDOFF
+            if not (choice.content or "").strip():
+                working.append({"role": "assistant", "content": assistant_text})
+            break
     else:
-        # Hit max iters without a final text reply
         if not assistant_text:
             assistant_text = (
                 "Trail's a bit foggy on my end ⛰️ — mind sending that again? "
@@ -119,4 +139,29 @@ def run_agent(
             )
             working.append({"role": "assistant", "content": assistant_text})
 
-    return assistant_text, working, products_for_ui
+    flags = {"handed_off": handed_off, "handoff_reason": handoff_reason}
+    return assistant_text, working, products_for_ui, flags
+
+
+def run_nudge(history: list[dict[str, Any]]) -> tuple[str, list[dict[str, Any]]]:
+    """One-shot idle follow-up. Does not call tools. Does not add a fake user turn."""
+    client = _client()
+    messages = [{"role": "system", "content": build_nudge_prompt()}]
+    messages.extend(_trim_history(history))
+    messages.append(
+        {
+            "role": "user",
+            "content": (
+                "[SYSTEM] The customer has been idle. Write the one-time check-in now. "
+                "Do not call tools. Do not ask them to rate the conversation."
+            ),
+        }
+    )
+    response = client.chat.completions.create(
+        model=MODEL,
+        messages=messages,
+    )
+    text = (response.choices[0].message.content or "").strip() or DEFAULT_NUDGE
+    working = list(history)
+    working.append({"role": "assistant", "content": text})
+    return text, working

@@ -13,6 +13,7 @@ from server.tools import (
     early_riser_promo,
     lookup_order,
     recommend_products,
+    request_human_handoff,
     run_tool,
     search_catalog,
 )
@@ -140,10 +141,26 @@ def test_search_catalog_in_stock_only():
         assert prod["inventory"] > 0
 
 
-def test_search_catalog_fallback_on_no_matches():
-    res = search_catalog(query="xyzzqy999999")
-    assert res["fallback"] is True
-    assert res["count"] > 0  # Returns top adventure picks as fallback
+def test_search_catalog_no_matches_is_honest():
+    """No soft popular fallback — empty result with available tags for the agent."""
+    res = search_catalog(query="jackets")
+    assert res["found"] is False
+    assert res["fallback"] is False
+    assert res["count"] == 0
+    assert res["products"] == []
+    assert res["message"]
+    assert "available_tags" in res
+
+
+def test_search_catalog_hiking_backpacks():
+    res = search_catalog(query="hiking backpacks")
+    assert res["found"] is True
+    assert res["products"][0]["sku"] == "SOBP001"
+
+
+def test_search_catalog_exclude_skus():
+    res = search_catalog(query="hiking backpack", exclude_skus=["SOBP001"])
+    assert res["found"] is False or all(p["sku"] != "SOBP001" for p in res["products"])
 
 
 def test_recommend_products_alias():
@@ -197,3 +214,10 @@ def test_run_tool_unknown():
     res, products = run_tool("unknown_tool", {})
     assert "error" in res
     assert products is None
+
+
+def test_request_human_handoff():
+    res = request_human_handoff(reason="explicit_request", summary="Wants a refund")
+    assert res["handed_off"] is True
+    assert res["ai_muted"] is True
+    assert res["reason"] == "explicit_request"

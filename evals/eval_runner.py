@@ -66,9 +66,9 @@ def run_single_test(test_case: EvalTestCase) -> dict[str, Any]:
     if test_case.time_mock_pt:
         mock_dt = make_datetime_mock(test_case.time_mock_pt)
         with patch("server.tools.datetime", mock_dt), patch("server.prompts.datetime", mock_dt):
-            assistant_text, history, products = run_agent(history=[], user_message=user_msg)
+            assistant_text, history, products, _flags = run_agent(history=[], user_message=user_msg)
     else:
-        assistant_text, history, products = run_agent(history=[], user_message=user_msg)
+        assistant_text, history, products, _flags = run_agent(history=[], user_message=user_msg)
 
     tool_calls = extract_tool_calls(history)
     executed_tool_names = [tc["name"] for tc in tool_calls]

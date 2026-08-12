@@ -24,3 +24,17 @@ def test_order_lookup_allows_either_identifier():
     assert "either" in prompt.lower()
     assert "do NOT ask for email first" in prompt
     assert "do NOT ask for an order number first" in prompt
+
+
+def test_handoff_skill_in_prompt():
+    prompt = build_system_prompt()
+    assert "request_human_handoff" in prompt
+    assert "Skill 4" in prompt
+
+
+def test_nudge_prompt_is_check_in():
+    from server.prompts import build_nudge_prompt
+
+    prompt = build_nudge_prompt()
+    assert "Idle check-in" in prompt
+    assert "Do not call tools" in prompt

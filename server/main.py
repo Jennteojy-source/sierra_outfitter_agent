@@ -4,18 +4,20 @@ from __future__ import annotations
 
 import base64
 import mimetypes
+import os
 import uuid
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, Form, Header, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
-from server.agent import run_agent
+from server.agent import run_agent, run_nudge
+from server.ratings import save_rating
 
 ROOT = Path(__file__).resolve().parent.parent
 load_dotenv(ROOT / ".env")
@@ -34,25 +36,78 @@ app.add_middleware(
 sessions: dict[str, list[dict[str, Any]]] = {}
 # session_id -> UI-friendly messages for the frontend
 ui_sessions: dict[str, list[dict[str, Any]]] = {}
+session_meta: dict[str, dict[str, Any]] = {}
 
 ASSETS_DIR = ROOT / "assets"
 MAX_IMAGE_BYTES = 8 * 1024 * 1024
+HANDOFF_NOTE_ACK = (
+    "Got it — I'll pass that along to the team. "
+    "Hang tight, a human trail guide will pick this up shortly."
+)
+
+
+def _idle_seconds() -> int:
+    raw = os.getenv("NUDGE_IDLE_SECONDS", "300")
+    try:
+        return max(5, min(int(raw), 3600))
+    except ValueError:
+        return 300
+
+
+def _fresh_meta() -> dict[str, Any]:
+    return {
+        "nudged": False,
+        "rated": False,
+        "handed_off": False,
+        "handoff_reason": None,
+    }
 
 
 class HistoryResponse(BaseModel):
     session_id: str
     messages: list[dict[str, Any]]
+    handed_off: bool = False
+    nudged: bool = False
+    rated: bool = False
 
 
 class ChatResponse(BaseModel):
     session_id: str
     message: str
     products: list[dict[str, Any]] | None = None
+    handed_off: bool = False
+    muted: bool = False
+    kind: str | None = None
 
 
 class ResetResponse(BaseModel):
     session_id: str
     ok: bool = True
+    handed_off: bool = False
+    nudged: bool = False
+
+
+class ConfigResponse(BaseModel):
+    nudge_idle_seconds: int
+
+
+class NudgeResponse(BaseModel):
+    session_id: str
+    message: str | None = None
+    already_sent: bool = False
+    skipped: bool = False
+    reason: str | None = None
+
+
+class RatingRequest(BaseModel):
+    rating: Literal["up", "down", "skip"]
+    comment: str | None = Field(default=None, max_length=500)
+
+
+class RatingResponse(BaseModel):
+    session_id: str
+    ok: bool = True
+    already_rated: bool = False
 
 
 def _ensure_session(session_id: str | None) -> str:
@@ -61,7 +116,22 @@ def _ensure_session(session_id: str | None) -> str:
         sid = str(uuid.uuid4())
     sessions.setdefault(sid, [])
     ui_sessions.setdefault(sid, [])
+    session_meta.setdefault(sid, _fresh_meta())
     return sid
+
+
+def _meta(sid: str) -> dict[str, Any]:
+    return session_meta.setdefault(sid, _fresh_meta())
+
+
+def _has_exchange(sid: str) -> bool:
+    ui = ui_sessions.get(sid, [])
+    has_user = any(m.get("role") == "user" for m in ui)
+    has_asst = any(
+        m.get("role") == "assistant" and m.get("kind") not in ("handoff_ack",)
+        for m in ui
+    )
+    return has_user and has_asst
 
 
 def _build_user_content(text: str, image_b64: str | None, image_mime: str | None) -> Any:
@@ -91,18 +161,106 @@ def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
+@app.get("/api/config", response_model=ConfigResponse)
+def get_config() -> ConfigResponse:
+    return ConfigResponse(nudge_idle_seconds=_idle_seconds())
+
+
 @app.get("/api/history", response_model=HistoryResponse)
 def get_history(x_session_id: str | None = Header(default=None)) -> HistoryResponse:
     sid = _ensure_session(x_session_id)
-    return HistoryResponse(session_id=sid, messages=ui_sessions.get(sid, []))
+    meta = _meta(sid)
+    return HistoryResponse(
+        session_id=sid,
+        messages=ui_sessions.get(sid, []),
+        handed_off=bool(meta.get("handed_off")),
+        nudged=bool(meta.get("nudged")),
+        rated=bool(meta.get("rated")),
+    )
 
 
 @app.post("/api/reset", response_model=ResetResponse)
 def reset(x_session_id: str | None = Header(default=None)) -> ResetResponse:
-    sid = _ensure_session(x_session_id)
+    old = x_session_id.strip() if x_session_id else ""
+    if old:
+        sessions.pop(old, None)
+        ui_sessions.pop(old, None)
+        session_meta.pop(old, None)
+    sid = str(uuid.uuid4())
     sessions[sid] = []
     ui_sessions[sid] = []
-    return ResetResponse(session_id=sid)
+    session_meta[sid] = _fresh_meta()
+    return ResetResponse(session_id=sid, ok=True, handed_off=False, nudged=False)
+
+
+@app.post("/api/nudge", response_model=NudgeResponse)
+def nudge(x_session_id: str | None = Header(default=None)) -> NudgeResponse:
+    sid = _ensure_session(x_session_id)
+    meta = _meta(sid)
+
+    if meta.get("handed_off"):
+        return NudgeResponse(session_id=sid, skipped=True, reason="handed_off")
+    if not _has_exchange(sid):
+        return NudgeResponse(session_id=sid, skipped=True, reason="no_exchange")
+
+    if meta.get("nudged"):
+        existing = next(
+            (m for m in reversed(ui_sessions[sid]) if m.get("kind") == "nudge"),
+            None,
+        )
+        return NudgeResponse(
+            session_id=sid,
+            message=(existing or {}).get("content"),
+            already_sent=True,
+        )
+
+    try:
+        text, updated = run_nudge(sessions[sid])
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    sessions[sid] = updated
+    meta["nudged"] = True
+    ui_sessions[sid].append(
+        {
+            "role": "assistant",
+            "content": text,
+            "kind": "nudge",
+        }
+    )
+    return NudgeResponse(session_id=sid, message=text, already_sent=False)
+
+
+@app.post("/api/rating", response_model=RatingResponse)
+def submit_rating(
+    body: RatingRequest,
+    x_session_id: str | None = Header(default=None),
+) -> RatingResponse:
+    sid = _ensure_session(x_session_id)
+    meta = _meta(sid)
+    if meta.get("rated"):
+        return RatingResponse(session_id=sid, ok=True, already_rated=True)
+
+    nudge_msg = next(
+        (m for m in reversed(ui_sessions.get(sid, [])) if m.get("kind") == "nudge"),
+        None,
+    )
+    transcript = [
+        {"role": m.get("role"), "content": m.get("content"), "kind": m.get("kind")}
+        for m in ui_sessions.get(sid, [])
+        if m.get("role") in ("user", "assistant")
+    ]
+    save_rating(
+        {
+            "session_id": sid,
+            "rating": body.rating,
+            "comment": (body.comment or "").strip() or None,
+            "nudge_text": (nudge_msg or {}).get("content"),
+            "transcript": transcript,
+        }
+    )
+    meta["rated"] = True
+    return RatingResponse(session_id=sid, ok=True, already_rated=False)
 
 
 @app.post("/api/chat", response_model=ChatResponse)
@@ -112,6 +270,7 @@ async def chat(
     image: UploadFile | None = File(default=None),
 ) -> ChatResponse:
     sid = _ensure_session(x_session_id)
+    meta = _meta(sid)
 
     image_b64 = None
     image_mime = None
@@ -129,16 +288,6 @@ async def chat(
     if not message.strip() and not image_b64:
         raise HTTPException(status_code=400, detail="Send a message or an image")
 
-    user_content = _build_user_content(message, image_b64, image_mime)
-    user_msg = {"role": "user", "content": user_content}
-
-    try:
-        assistant_text, updated, products = run_agent(sessions[sid], user_msg)
-    except Exception as exc:  # noqa: BLE001 — surface cleanly to UI
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
-
-    sessions[sid] = updated
-
     ui_sessions[sid].append(
         {
             "role": "user",
@@ -146,15 +295,57 @@ async def chat(
             "image": image_preview,
         }
     )
+
+    if meta.get("handed_off"):
+        ui_sessions[sid].append(
+            {
+                "role": "assistant",
+                "content": HANDOFF_NOTE_ACK,
+                "kind": "handoff_ack",
+            }
+        )
+        return ChatResponse(
+            session_id=sid,
+            message=HANDOFF_NOTE_ACK,
+            handed_off=True,
+            muted=True,
+            kind="handoff_ack",
+        )
+
+    user_content = _build_user_content(message, image_b64, image_mime)
+    user_msg = {"role": "user", "content": user_content}
+
+    try:
+        assistant_text, updated, products, flags = run_agent(sessions[sid], user_msg)
+    except Exception as exc:  # noqa: BLE001 — surface cleanly to UI
+        ui_sessions[sid].pop()
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    sessions[sid] = updated
+    handed_off = bool(flags.get("handed_off"))
+    kind = "handoff" if handed_off else None
+    if handed_off:
+        meta["handed_off"] = True
+        meta["handoff_reason"] = flags.get("handoff_reason")
+        meta["nudged"] = True  # do not idle-nudge after a live handoff
+
     ui_sessions[sid].append(
         {
             "role": "assistant",
             "content": assistant_text,
             "products": products,
+            "kind": kind,
         }
     )
 
-    return ChatResponse(session_id=sid, message=assistant_text, products=products)
+    return ChatResponse(
+        session_id=sid,
+        message=assistant_text,
+        products=products,
+        handed_off=handed_off,
+        muted=handed_off,
+        kind=kind,
+    )
 
 
 @app.get("/assets/{filename}")
@@ -165,6 +356,5 @@ def serve_asset(filename: str) -> FileResponse:
     return FileResponse(path)
 
 
-# Optional: also mount full assets dir
 if ASSETS_DIR.is_dir():
     app.mount("/static-assets", StaticFiles(directory=str(ASSETS_DIR)), name="static-assets")
