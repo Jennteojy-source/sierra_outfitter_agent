@@ -81,6 +81,26 @@ A trail-guide chat that stays in retail scope: catalog, orders, and Early Risers
 
 ---
 
+## Future improvements
+
+### Streaming UX
+
+- Stream assistant tokens (and optionally tool-start events) over SSE/WebSockets so the UI paints immediately instead of waiting for the full tool loop.
+- Keep optimistic user bubbles; replace the “Scouting the trail…” placeholder with partial text + cancel-in-flight.
+
+### Agent frameworks (LangGraph / Agents SDK / LangChain)
+
+- Move from the hand-written loop to a framework when workflows need **durable runs**, **retries**, and **human-in-the-loop interrupts** (pause on refund/handoff, resume when a trail guide joins).
+- Use checkpointed state so conversations survive deploys and multi-server setups; keep tool-enforced policy (Early Risers, dual order identifiers) as-is.
+
+### Real storage & richer search
+
+- Persist catalog, orders, and session history in a real DB (e.g. MySQL/Postgres) instead of JSON + in-process dicts.
+- Keep a dedicated search index (OpenSearch/Elastic, or DB full-text) for lexical recall; add **embedding search** alongside it so paraphrases and fuzzy intent still hit the right SKUs.
+- Hybrid retrieve (keyword + vectors) → rerank → return structured product cards the same way the demo UI does today.
+
+---
+
 ## Prerequisites
 
 - Python 3
