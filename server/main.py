@@ -16,7 +16,6 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from server.agent import MAX_MESSAGE_CHARS, run_agent, run_nudge
-from server.ratings import save_rating
 
 ROOT = Path(__file__).resolve().parent.parent
 load_dotenv(ROOT / ".env")
@@ -169,6 +168,7 @@ def _build_user_content(text: str, image_b64: str | None, image_mime: str | None
             "type": "image_url",
             "image_url": {
                 "url": f"data:{image_mime or 'image/png'};base64,{image_b64}",
+                "detail": "high",
             },
         }
     )
@@ -261,24 +261,6 @@ def submit_rating(
     if meta.get("rated"):
         return RatingResponse(session_id=sid, ok=True, already_rated=True)
 
-    nudge_msg = next(
-        (m for m in reversed(ui_sessions.get(sid, [])) if m.get("kind") == "nudge"),
-        None,
-    )
-    transcript = [
-        {"role": m.get("role"), "content": m.get("content"), "kind": m.get("kind")}
-        for m in ui_sessions.get(sid, [])
-        if m.get("role") in ("user", "assistant")
-    ]
-    save_rating(
-        {
-            "session_id": sid,
-            "rating": body.rating,
-            "comment": (body.comment or "").strip() or None,
-            "nudge_text": (nudge_msg or {}).get("content"),
-            "transcript": transcript,
-        }
-    )
     meta["rated"] = True
     return RatingResponse(session_id=sid, ok=True, already_rated=False)
 

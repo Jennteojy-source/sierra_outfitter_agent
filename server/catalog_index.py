@@ -55,6 +55,10 @@ STOPWORDS = {
     "you",
     "have",
     "sell",
+    "this",
+    "that",
+    "these",
+    "those",
     "best",
     "good",
     "like",
@@ -73,7 +77,12 @@ SYNONYMS: dict[str, list[str]] = {
     "drink": ["beverage", "energy"],
     "beverage": ["drink"],
     "protein": ["bars", "food"],
-    "cloak": ["invisibility", "stealth"],
+    "cloak": ["invisibility", "stealth", "invisible", "camouflage", "camo", "poncho"],
+    "invisibility": ["cloak", "stealth", "invisible"],
+    "invisible": ["cloak", "invisibility", "stealth"],
+    "camouflage": ["cloak", "stealth", "camo"],
+    "camo": ["cloak", "camouflage", "stealth"],
+    "poncho": ["cloak"],
     "jetpack": ["flight", "flying"],
     "plane": ["aircraft", "flight", "aviation"],
     "lamp": ["lampshade", "lighting", "light"],
@@ -102,6 +111,16 @@ MODIFIERS = {
     "rugged",
     "durable",
     "lightweight",
+    "clear",
+    "transparent",
+    "translucent",
+    "camouflage",
+    "camo",
+    "hooded",
+    "poncho",
+    "invisible",
+    "invisibility",
+    "stealth",
 }
 
 FIELD_WEIGHTS = {
@@ -245,12 +264,17 @@ class CatalogIndex:
         if browse:
             return self._browse(limit=limit, in_stock_only=in_stock_only, excluded=excluded)
 
-        unknown = [
-            t
-            for t in tokens
-            if t not in MODIFIERS and not self._term_indexed(t)
-        ]
-        if unknown:
+        # Tag-only search (query was stopwords like "gear")
+        if not tokens:
+            head_ok = True
+        else:
+            # English head noun is last: "clear cloak" → cloak. Unknown adjectives
+            # must not hide a real match. Unknown head nouns (boots, jackets) still miss.
+            head = tokens[-1]
+            head_ok = self._resolves(head)
+
+        if tokens and not head_ok:
+            unknown = [t for t in tokens if not self._resolves(t) and t not in MODIFIERS]
             return self._miss(
                 query,
                 expanded,
@@ -258,7 +282,7 @@ class CatalogIndex:
                 requested_tags,
                 excluded,
                 extra=(
-                    f"Unknown product term(s): {', '.join(unknown)}. "
+                    f"Unknown product term(s): {', '.join(unknown or [tokens[-1]])}. "
                     "Do not substitute unrelated items."
                 ),
             )
@@ -368,7 +392,14 @@ class CatalogIndex:
         for variant in _stem_variants(term):
             if self.inverted.get(variant):
                 return True
+            for syn in SYNONYMS.get(variant, []):
+                if self.inverted.get(syn):
+                    return True
         return False
+
+    def _resolves(self, term: str) -> bool:
+        """True if the token is in the index or expands to an indexed synonym."""
+        return self._term_indexed(term)
 
     def _browse(
         self,

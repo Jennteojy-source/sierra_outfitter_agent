@@ -192,12 +192,7 @@ def test_handoff_keeps_agent_available_for_in_scope_followups():
         assert mock_agent.call_count == 1
 
 
-def test_rating_writes_mock_store(monkeypatch, tmp_path):
-    monkeypatch.setattr("server.ratings.DATA_DIR", tmp_path)
-    monkeypatch.setattr("server.ratings.RATINGS_PATH", tmp_path / "ratings.json")
-    monkeypatch.setattr("server.ratings._ratings", [])
-    monkeypatch.setattr("server.ratings._loaded", True)
-
+def test_rating_endpoint():
     sid = "rating-sid"
     response = client.post(
         "/api/rating",
@@ -206,15 +201,13 @@ def test_rating_writes_mock_store(monkeypatch, tmp_path):
     )
     assert response.status_code == 200
     assert response.json()["ok"] is True
-    stored = json.loads((tmp_path / "ratings.json").read_text())
-    assert stored[0]["rating"] == "up"
-    assert stored[0]["comment"] == "found my order fast"
+    assert response.json()["already_rated"] is False
 
     again = client.post(
         "/api/rating",
         json={"rating": "down"},
         headers={"x-session-id": sid},
     )
+    assert again.status_code == 200
     assert again.json()["already_rated"] is True
-    stored = json.loads((tmp_path / "ratings.json").read_text())
-    assert len(stored) == 1
+

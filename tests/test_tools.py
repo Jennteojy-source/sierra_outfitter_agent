@@ -196,6 +196,21 @@ def test_search_catalog_exclude_skus():
     assert res["found"] is False or all(p["sku"] != "SOBP001" for p in res["products"])
 
 
+def test_search_catalog_visual_cloak_adjectives_still_match():
+    """Vision often adds 'clear' / 'camouflage'; those must not hide the invisibility cloak."""
+    for query in (
+        "cloak",
+        "clear cloak",
+        "camouflage cloak",
+        "transparent cloak",
+        "this transparent cloak",
+        "invisibility cloak",
+    ):
+        res = search_catalog(query=query)
+        assert res["found"] is True, query
+        assert res["products"][0]["sku"] == "SOSV007", query
+
+
 # =============================================================================
 # 3. EARLY RISERS DISCOUNT (early_riser_promo)
 # =============================================================================

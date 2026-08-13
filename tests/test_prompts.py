@@ -65,3 +65,12 @@ def test_nudge_prompt_is_check_in_not_full_manual():
     assert "Do not call tools" in nudge
     assert "search_catalog" not in nudge
     assert len(nudge) < len(build_system_prompt())
+
+
+def test_prompt_tells_agent_to_look_at_photos():
+    idle = build_system_prompt()
+    assert "You CAN see customer photos" in idle
+    assert "cannot see images" in idle.lower() or "Do not say you cannot see" in idle
+    attached = build_system_prompt(photo_attached=True)
+    assert "photo is attached" in attached.lower()
+    assert "Do not ask them to describe the photo" in attached

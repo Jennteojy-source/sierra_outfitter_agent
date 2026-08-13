@@ -6,6 +6,7 @@ from server.agent import (
     MAX_HISTORY_MESSAGES,
     _drop_old_images,
     _last_user_text,
+    _latest_user_has_image,
     _messages_for_model,
     _trim_history,
 )
@@ -87,3 +88,18 @@ def test_messages_for_model_strips_old_images_after_trim():
         if isinstance(m.get("content"), list)
     ]
     assert len(image_msgs) == 1
+
+
+def test_latest_user_has_image():
+    text_only = [{"role": "user", "content": "hi"}]
+    assert _latest_user_has_image(text_only) is False
+    with_photo = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "do you sell this"},
+                {"type": "image_url", "image_url": {"url": "data:image/png;base64,xx"}},
+            ],
+        }
+    ]
+    assert _latest_user_has_image(with_photo) is True

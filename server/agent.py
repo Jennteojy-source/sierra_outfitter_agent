@@ -51,6 +51,19 @@ def _content_text(content: Any) -> str:
     return ""
 
 
+def _content_has_image(content: Any) -> bool:
+    if not isinstance(content, list):
+        return False
+    return any(isinstance(part, dict) and part.get("type") == "image_url" for part in content)
+
+
+def _latest_user_has_image(history: list[dict[str, Any]]) -> bool:
+    for msg in reversed(history):
+        if msg.get("role") == "user":
+            return _content_has_image(msg.get("content"))
+    return False
+
+
 def _last_user_text(history: list[dict[str, Any]]) -> str:
     for msg in reversed(history):
         if msg.get("role") == "user":
@@ -125,6 +138,7 @@ def run_agent(
                 "content": build_system_prompt(
                     handoff_queued=handoff_queued or handed_off,
                     handoff_reason=new_handoff_reason or handoff_reason,
+                    photo_attached=_latest_user_has_image(working),
                 ),
             }
         ]
