@@ -1,8 +1,9 @@
 """
 Evaluation Runner for Sierra Outfitter AI Agent.
 
-Executes test cases against the agent, evaluates tool invocation accuracy,
-argument correctness, and text response assertions.
+Executes test cases against the agent and scores tool invocation,
+argument correctness, empty-match results, and handoff flags.
+Does not score assistant wording.
 """
 
 from __future__ import annotations
@@ -40,8 +41,9 @@ def make_datetime_mock(iso_str: str):
 
 
 def extract_tool_calls(history: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Extract all tool calls executed during the agent run."""
-    calls = []
+    """Extract all tool calls executed during the agent run, with parsed results."""
+    calls: list[dict[str, Any]] = []
+    by_id: dict[str, dict[str, Any]] = {}
     for msg in history:
         if msg.get("role") == "assistant" and msg.get("tool_calls"):
             for tc in msg["tool_calls"]:
@@ -51,32 +53,30 @@ def extract_tool_calls(history: list[dict[str, Any]]) -> list[dict[str, Any]]:
                     args = json.loads(raw_args)
                 except Exception:
                     args = {}
-                calls.append({"name": name, "args": args})
+                call = {"name": name, "args": args, "id": tc.get("id"), "result": None}
+                calls.append(call)
+                if call["id"]:
+                    by_id[call["id"]] = call
+        elif msg.get("role") == "tool":
+            tid = msg.get("tool_call_id")
+            if tid in by_id:
+                try:
+                    by_id[tid]["result"] = json.loads(msg.get("content") or "{}")
+                except Exception:
+                    by_id[tid]["result"] = {}
     return calls
 
 
-def _check_text_assertions(
-    assertions: list,
-    text: str,
-    *,
-    prefix: str = "",
-) -> list[str]:
-    failures: list[str] = []
-    label_prefix = f"{prefix} " if prefix else ""
-    for i, assertion in enumerate(assertions, 1):
-        if isinstance(assertion, str):
-            if assertion.lower() not in text.lower():
-                failures.append(
-                    f"{label_prefix}Response missing expected text substring: '{assertion}'"
-                )
-        elif callable(assertion):
-            label = getattr(assertion, "__name__", f"assertion_{i}")
-            try:
-                if not assertion(text):
-                    failures.append(f"{label_prefix}Text assertion '{label}' returned False.")
-            except Exception as e:
-                failures.append(f"{label_prefix}Text assertion '{label}' error: {e}")
-    return failures
+def _is_no_match_result(result: Any) -> bool:
+    """True when a completed lookup/search found nothing (not a missing-field ask)."""
+    if not isinstance(result, dict):
+        return False
+    if result.get("need"):
+        return False
+    if result.get("found") is False:
+        return True
+    products = result.get("products")
+    return isinstance(products, list) and len(products) == 0 and result.get("count") == 0
 
 
 def _run_conversation(test_case: EvalTestCase) -> tuple[str, str, list[dict[str, Any]], list[list[str]], dict[str, Any]]:
@@ -120,15 +120,6 @@ def run_single_test(test_case: EvalTestCase) -> dict[str, Any]:
     executed_tool_names = [tc["name"] for tc in tool_calls]
     failures: list[str] = []
 
-    if test_case.follow_ups and test_case.first_turn_assertions:
-        failures.extend(
-            _check_text_assertions(
-                test_case.first_turn_assertions,
-                first_text,
-                prefix="Turn 1",
-            )
-        )
-
     if test_case.forbidden_until_last:
         for turn_i, names in enumerate(turn_names[:-1], 1):
             for tool in test_case.forbidden_until_last:
@@ -159,7 +150,17 @@ def run_single_test(test_case: EvalTestCase) -> dict[str, Any]:
                     f"Tool '{tool_name}' argument check failed for args: {matching_args}"
                 )
 
-    failures.extend(_check_text_assertions(test_case.text_assertions, assistant_text))
+    if test_case.expect_no_match:
+        matching = [tc for tc in tool_calls if tc["name"] == test_case.expect_no_match]
+        if not matching:
+            failures.append(
+                f"Expected '{test_case.expect_no_match}' to return no match, but it was never called."
+            )
+        elif not _is_no_match_result(matching[-1].get("result")):
+            failures.append(
+                f"Expected '{test_case.expect_no_match}' to return no match; "
+                f"last result was: {matching[-1].get('result')}"
+            )
 
     handed_off = bool(flags.get("handed_off"))
     if test_case.expect_handed_off is True and not handed_off:

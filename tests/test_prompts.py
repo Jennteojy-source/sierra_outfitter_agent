@@ -38,11 +38,13 @@ def test_prompt_has_no_duplicate_skill_headers():
     assert "HubSpot" not in prompt
 
 
-def test_order_lookup_requires_both_identifiers():
+def test_order_lookup_lets_the_tool_gate_identifiers():
     prompt = build_system_prompt()
-    assert "BOTH" in prompt
-    assert "order_number AND email" in prompt
-    assert "Do NOT ask for email first" not in prompt
+    assert "Always — the tool decides if identifiers are enough" in prompt
+    assert "Always call for order status" in prompt
+    assert "Do not guess a missing field" in prompt
+    assert "Call immediately when BOTH" not in prompt
+    assert "partial key" not in prompt
 
 
 def test_handoff_queued_block_only_when_pending():

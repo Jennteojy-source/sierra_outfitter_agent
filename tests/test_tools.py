@@ -286,6 +286,10 @@ def test_tool_schemas_do_not_leak_catalog_or_order_ids():
     assert "SOBP001" not in blob
     assert "hiking backpack" not in blob.lower()
     assert "Food & Beverage" not in blob
+    lookup = next(t for t in TOOL_DEFINITIONS if t["function"]["name"] == "lookup_order")
+    desc = lookup["function"]["description"]
+    assert "The tool decides if identifiers" in desc
+    assert "required" not in lookup["function"]["parameters"]
 
 
 # =============================================================================

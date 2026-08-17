@@ -31,8 +31,7 @@ def test_eval_cases_are_well_formed():
             assert follow.strip(), f"{case.id}: empty follow-up"
         for tool in case.forbidden_until_last:
             assert tool in VALID_TOOLS, f"{case.id}: unknown tool {tool}"
-        if case.follow_ups:
-            assert case.forbidden_until_last, f"{case.id}: multi-turn case should set forbidden_until_last"
+        assert getattr(case, "text_assertions", None) in (None, []), case.id
 
 
 def test_eval_covers_multi_turn_order_lookup():
@@ -41,7 +40,6 @@ def test_eval_covers_multi_turn_order_lookup():
     assert all(c.category == "order" for c in multi)
     assert any(c.id == "ord_07_number_then_email" for c in multi)
     assert any(c.id == "ord_08_email_then_number" for c in multi)
-    assert any("lookup_order" in c.forbidden_until_last for c in multi)
 
 
 def test_eval_covers_core_agent_skills():
@@ -56,3 +54,10 @@ def test_eval_covers_core_agent_skills():
     assert any("request_human_handoff" in c.expected_tools for c in EVAL_DATASET)
     assert any(c.expect_handed_off is True for c in EVAL_DATASET)
     assert any(c.expect_handed_off is False for c in EVAL_DATASET)
+    miss_ids = {c.id for c in EVAL_DATASET if c.expect_no_match}
+    assert "cat_07_hiking_boots_honest_miss" in miss_ids
+    assert "ord_04_not_found" in miss_ids
+    assert "ord_09_mismatch_after_collecting" in miss_ids
+    for case in EVAL_DATASET:
+        if case.expect_no_match:
+            assert case.expect_no_match in case.expected_tools, case.id

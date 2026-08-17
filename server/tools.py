@@ -199,23 +199,23 @@ TOOL_DEFINITIONS = [
         "function": {
             "name": "lookup_order",
             "description": (
-                "Skill: Customer Orders. Look up order status and tracking. "
-                "Requires BOTH order_number AND email. If either is missing, ask for it "
-                "instead of calling this tool. Use for shipment, delivery, or tracking."
+                "Skill: Customer Orders. Call for any order status, shipment, or tracking "
+                "question. Pass any order number and/or email the customer typed; omit a "
+                "field they have not given. Do not guess. The tool decides if identifiers "
+                "are enough and whether they match. Never invent a format or tracking number."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "order_number": {
                         "type": "string",
-                        "description": "Order number the customer provided (with or without a #). Required with email.",
+                        "description": "Order number as the customer typed it, if they gave one.",
                     },
                     "email": {
                         "type": "string",
-                        "description": "Customer email on the order. Required with order_number.",
+                        "description": "Email as the customer typed it, if they gave one.",
                     },
                 },
-                "required": ["order_number", "email"],
             },
         },
     },
