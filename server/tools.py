@@ -208,7 +208,7 @@ TOOL_DEFINITIONS = [
                 "properties": {
                     "order_number": {
                         "type": "string",
-                        "description": "Order number such as #W001 or W001. Required with email.",
+                        "description": "Order number the customer provided (with or without a #). Required with email.",
                     },
                     "email": {
                         "type": "string",
@@ -228,8 +228,9 @@ TOOL_DEFINITIONS = [
                 "description, SKU, and stock. Use for recommendations, 'do you sell X?', "
                 "tag browsing, and in-stock questions. Prefer this over inventing products. "
                 "If found=false, say we don't carry that item — do not invent alternatives "
-                "as if they matched the query. For 'what do you sell' / 'I want to buy "
-                "something', call with query 'browse' and only mention returned products."
+                "as if they matched the query. For 'what do you sell' / 'show me some "
+                "products' / 'I want to buy something', call with query 'browse' and only "
+                "mention returned products."
             ),
             "parameters": {
                 "type": "object",
@@ -237,8 +238,8 @@ TOOL_DEFINITIONS = [
                     "query": {
                         "type": "string",
                         "description": (
-                            "Search query — product name fragments, activity, category keywords "
-                            "(e.g. 'hiking backpack', 'skis', 'jackets')"
+                            "Search query — nouns from the customer's message or photo. "
+                            "Use 'browse' for open-ended shopping."
                         ),
                     },
                     "limit": {
@@ -256,8 +257,7 @@ TOOL_DEFINITIONS = [
                         "type": "array",
                         "items": {"type": "string"},
                         "description": (
-                            "Optional tag filters to boost (e.g. Hiking, Snow, Adventure, "
-                            "Food & Beverage)."
+                            "Optional tag filters matching words the customer used."
                         ),
                     },
                     "exclude_skus": {
@@ -279,9 +279,8 @@ TOOL_DEFINITIONS = [
             "name": "early_riser_promo",
             "description": (
                 "Skill: Early Risers Discount. Call for any coupon, discount, or Early "
-                "Risers request. The tool reads the customer's actual message and only "
-                "mints a unique 10% code when they explicitly asked for Early Risers "
-                "AND it is 8:00–10:00 AM Pacific. Do not invent codes; report the tool result."
+                "Risers request. Eligibility and codes come only from this tool. "
+                "Never invent a code; report the tool result."
             ),
             "parameters": {
                 "type": "object",

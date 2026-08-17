@@ -268,6 +268,26 @@ def test_run_tool_early_riser_uses_customer_text_not_llm_args():
         assert res["code"] is None
 
 
+def test_early_riser_tool_schema_does_not_leak_eligibility():
+    from server.tools import TOOL_DEFINITIONS
+
+    promo = next(t for t in TOOL_DEFINITIONS if t["function"]["name"] == "early_riser_promo")
+    desc = promo["function"]["description"]
+    assert "8:00" not in desc
+    assert "10:00" not in desc
+    assert "explicit" not in desc.lower()
+
+
+def test_tool_schemas_do_not_leak_catalog_or_order_ids():
+    from server.tools import TOOL_DEFINITIONS
+
+    blob = str(TOOL_DEFINITIONS)
+    assert "W001" not in blob
+    assert "SOBP001" not in blob
+    assert "hiking backpack" not in blob.lower()
+    assert "Food & Beverage" not in blob
+
+
 # =============================================================================
 # 4. RUN_TOOL DISPATCHER
 # =============================================================================

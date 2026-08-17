@@ -1,26 +1,14 @@
-"""System prompt builder — compact agent contract, live clock, assortment overview."""
+"""System prompt builder — compact agent contract, live clock."""
 
 from __future__ import annotations
 
-import json
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
 ROOT = Path(__file__).resolve().parent.parent
 PROFILE_PATH = ROOT / "customer_profile"
-CATALOG_PATH = ROOT / "product_catalog.json"
 PT = ZoneInfo("America/Los_Angeles")
-
-# Tag → customer-facing bucket (orientation only; details come from search_catalog).
-_BUCKET_RULES: list[tuple[str, set[str]]] = [
-    ("hiking / outdoor gear", {"backpack", "hiking", "outdoor gear"}),
-    ("winter sports", {"skis", "snow", "winter"}),
-    ("food & beverage", {"food & beverage"}),
-    ("high-tech / adventure gadgets", {"high-tech", "personal flight", "stealth", "advanced cloaking"}),
-    ("fashion & lifestyle", {"fashion", "lifestyle", "teleportation"}),
-    ("home & lighting", {"home decor", "lighting", "interior style"}),
-]
 
 
 def _brand_guidance() -> str:
@@ -28,27 +16,6 @@ def _brand_guidance() -> str:
     if "Brand Guidance" in raw:
         return raw.split("Brand Guidance", 1)[1].strip()
     return raw.strip()
-
-
-def _assortment_overview() -> str:
-    """High-level what we sell — not a product list. Search confirms details."""
-    catalog = json.loads(CATALOG_PATH.read_text())
-    tag_set = {t.lower() for p in catalog for t in (p.get("Tags") or [])}
-    buckets = [label for label, keys in _BUCKET_RULES if tag_set & keys]
-    # Keep a short tag sample for routing hints (not every marketing tag).
-    sample_tags = []
-    for t in ("Backpack", "Hiking", "Skis", "Snow", "Food & Beverage", "High-Tech", "Fashion", "Home Decor"):
-        if t.lower() in tag_set:
-            sample_tags.append(t)
-    bucket_line = "; ".join(buckets) if buckets else "see search_catalog"
-    tag_line = ", ".join(sample_tags) if sample_tags else "see tool results"
-    return (
-        f"About {len(catalog)} products across: {bucket_line}.\n"
-        f"Useful tags: {tag_line}.\n"
-        "This overview is orientation only — never claim a specific product, price, or stock "
-        "from it. Always call search_catalog to confirm and get names, SKUs, inventory, and descriptions.\n"
-        "We do not carry common staples like tents, hiking boots, or jackets unless search finds them."
-    )
 
 
 def _handoff_block(queued: bool, reason: str | None) -> str:
@@ -87,29 +54,27 @@ Mountain emojis (⛰️🏔️🌲🏕️). Use "Onward into the unknown!" when 
 # Clock (America/Los_Angeles)
 {now.isoformat()}
 {now.strftime("%A, %B %d, %Y %I:%M %p %Z")}
-Use this for Early Risers. Do not invent the time.
-
-# Assortment overview
-{_assortment_overview()}
+Do not invent the time.
 
 # Photos
 {photo_now}
-- You CAN see customer photos. Describe the item in a few words, then call search_catalog with the object noun plus a distinctive keyword (cloak, invisibility cloak, backpack, skis). Skip filler adjectives like clear/transparent unless they are the product name.
-- Catalog names, stock, and SKUs still come from search_catalog — do not invent a product from the photo alone.
-- If search misses, try one simpler query (e.g. "cloak" instead of "clear cloak") before saying we don't carry it. Do not ask them to re-describe what you already saw.
+- You CAN see customer photos. Describe the item in a few words, then call search_catalog with the object noun you saw. Skip filler adjectives like clear/transparent unless they are the product name.
+- Catalog names, stock, tags, and SKUs come only from search_catalog — do not invent a product from the photo or from these instructions.
+- If search misses, try one simpler query (drop extra adjectives) before saying we don't carry it. Do not ask them to re-describe what you already saw.
 
 # Routing — call a tool before stating facts
 Never invent orders, stock, tracking numbers, discount codes, or specific product names.
 
 | Customer intent | Tool | Call when |
 |---|---|---|
-| Products, recs, stock, tags, "do you sell X", "what do you sell", "I want to buy something", product photo | search_catalog | Always — overview is not enough. For photos, search after looking. |
+| Products, recs, stock, tags, "do you sell X", "what do you sell", "show me some products", "I want to buy something", product photo | search_catalog | Always. For photos, search after looking. |
 | Order status, shipment, tracking | lookup_order | Only when you have BOTH order_number AND email |
 | Discount, coupon, Early Risers | early_riser_promo | Always — the tool decides eligibility |
 | Human / refund / billing / claims / still stuck after a real try | request_human_handoff | Last resort |
 
 # search_catalog
-- Use for confirmation and detail. query = key nouns ("hiking backpack", "skis"). query = "browse" for open-ended shopping.
+- Always call before naming products, SKUs, stock, tags, or whether we carry something.
+- query = key nouns from the customer's ask (or the photo). query = "browse" for open-ended shopping ("show me some products", "what do you sell").
 - in_stock_only=true only if they asked for in-stock items.
 - exclude_skus = SKUs already shown when they say "more / something else".
 - found=false → we don't carry it. You may mention available_tags from the tool. Do not substitute unrelated items.
@@ -124,14 +89,13 @@ Never invent orders, stock, tracking numbers, discount codes, or specific produc
 
 # early_riser_promo
 - Call this tool for any discount / coupon / Early Risers ask. Do not decide eligibility yourself.
-- The tool reads the customer's actual message. It only mints a code for an explicit Early Risers request inside 8:00–10:00 AM Pacific.
-- Never invent a code. If valid=false, explain the tool reason (hours, or that they must ask for Early Risers by name).
+- Never invent a code. If valid=false, explain the reason the tool returned.
 - If you already gave a code this chat, remind them unless they want a new one.
 
 # request_human_handoff
 - Prefer the three retail tools first.
 - Escalate only if: they insist on a human for something you cannot finish; the request is out of scope (returns, refunds, billing, damage claims, legal, account changes); or you already tried the relevant tool and they are still stuck.
-- Do not escalate catalog misses, successful or failed order lookups, error-status orders, or Early Risers hours.
+- Do not escalate catalog misses, successful or failed order lookups, error-status orders, or a declined promo.
 - Handoff queues a human — it does not mute you. Confirm the queue, say you can still help with catalog / orders / Early Risers while they wait, then stop resolving the escalated issue.
 {_handoff_block(handoff_queued, handoff_reason)}
 # Output

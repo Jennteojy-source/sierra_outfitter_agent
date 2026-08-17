@@ -14,18 +14,20 @@ def test_build_system_prompt_contains_brand_and_skills():
     assert "request_human_handoff" in prompt
     assert "America/Los_Angeles" in prompt
     assert "Onward into the unknown!" in prompt
-    assert "Assortment overview" in prompt
-    assert "orientation only" in prompt
-    assert "Always call search_catalog" in prompt or "Always — overview is not enough" in prompt
+    assert "Always call before naming products" in prompt
+    assert "Assortment overview" not in prompt
 
 
-def test_prompt_has_high_level_assortment_not_sku_dump():
+def test_prompt_does_not_leak_catalog_facts():
     prompt = build_system_prompt()
-    assert "hiking / outdoor gear" in prompt
-    assert "winter sports" in prompt
-    # Full SKU list should not be in the prompt — tools own product truth.
     assert "SOBP001" not in prompt
+    assert "SOTN002" not in prompt
     assert "Bhavish's Backcountry Blaze Backpack" not in prompt
+    assert "hiking / outdoor gear" not in prompt
+    assert "winter sports" not in prompt
+    assert "Useful tags:" not in prompt
+    assert "tents, hiking boots, or jackets" not in prompt
+    assert "#W001" not in prompt
 
 
 def test_prompt_has_no_duplicate_skill_headers():
@@ -57,6 +59,13 @@ def test_handoff_skill_in_prompt():
     assert "request_human_handoff" in prompt
     assert "Last resort" in prompt
     assert "the tool decides eligibility" in prompt.lower() or "Do not decide eligibility yourself" in prompt
+
+
+def test_prompt_does_not_leak_early_risers_eligibility():
+    prompt = build_system_prompt()
+    assert "8:00–10:00" not in prompt
+    assert "8:00-10:00" not in prompt
+    assert "must ask for Early Risers by name" not in prompt.lower()
 
 
 def test_nudge_prompt_is_check_in_not_full_manual():
